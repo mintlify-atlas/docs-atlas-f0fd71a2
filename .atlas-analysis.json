@@ -1,0 +1,86 @@
+{
+  "projectType": "saas",
+  "projectName": "Bodequita",
+  "projectDescription": "An Android mobile app built with Kotlin and Jetpack Compose for managing sales, purchases, products, suppliers, and cash closure of a local store.",
+  "theme": "almond",
+  "primaryColor": "#f76040",
+  "lightColor": "#13c5be",
+  "darkColor": "#a35cfb",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Overview",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": ["introduction", "getting-started/installation", "getting-started/quickstart"]
+          },
+          {
+            "group": "Architecture",
+            "pages": ["architecture/overview", "architecture/data-models", "architecture/mvvm"]
+          }
+        ]
+      },
+      {
+        "tab": "Features",
+        "groups": [
+          {
+            "group": "Core Modules",
+            "pages": [
+              "features/dashboard",
+              "features/products",
+              "features/sales",
+              "features/purchases",
+              "features/suppliers",
+              "features/cash-closure"
+            ]
+          },
+          {
+            "group": "User Interface",
+            "pages": ["features/navigation", "features/theming"]
+          }
+        ]
+      },
+      {
+        "tab": "Reference",
+        "groups": [
+          {
+            "group": "Data Layer",
+            "pages": ["reference/database", "reference/dao", "reference/repositories"]
+          },
+          {
+            "group": "ViewModels",
+            "pages": ["reference/viewmodels"]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Product management with categories, stock tracking, and search",
+    "Sales module with multi-product cart, subtotals, taxes, and history",
+    "Purchases module linked to suppliers with automatic stock updates",
+    "Cash closure with daily income/expense summary and net profit",
+    "Supplier management linked to purchases",
+    "Dashboard with store statistics and quick access to all modules",
+    "MVVM architecture with Room local database",
+    "Material Design 3 UI with Jetpack Compose",
+    "Dark/light theme support via ThemeManager",
+    "Weekly activity charts via Vico library"
+  ],
+  "publicApiSurface": [
+    "ProductDao: insert, update, delete, getAllProducts, getProductById, searchProducts",
+    "SaleDao: insertSale, insertSaleDetail, getSalesWithDetails, getDailySaleSummaries",
+    "PurchaseDao: insertPurchase, insertPurchaseDetail, getPurchasesWithDetails",
+    "SupplierDao: insert, update, delete, getAllSuppliers",
+    "CategoryDao: insert, update, delete, getAllCategories",
+    "MovementDao: insert, getMovementsByDate",
+    "ProductViewModel: products, addProduct, updateProduct, deleteProduct, searchProducts",
+    "SalesViewModel: sales, cart, addToCart, removeFromCart, completeSale",
+    "PurchasesViewModel: purchases, suppliers, products, registerPurchase",
+    "CashClosureViewModel: dailySummary, totalIncome, totalExpense, netProfit",
+    "DashboardViewModel: totalSales, totalProducts, weeklyActivity",
+    "CategoryViewModel: categories, addCategory, deleteCategory",
+    "SupplierViewModel: suppliers, addSupplier, updateSupplier, deleteSupplier"
+  ]
+}
