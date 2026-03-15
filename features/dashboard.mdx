@@ -1,0 +1,76 @@
+---
+title: Dashboard
+description: The main control panel showing today's sales activity, inventory status, a 7-day sales chart, and quick-access shortcuts to every module.
+---
+
+The **Dashboard** (Panel de Control) is the first screen you see after logging in. It gives you a real-time snapshot of your store's health and lets you jump to any module in one tap.
+
+## What the Dashboard Shows
+
+<CardGroup cols={2}>
+  <Card title="Today's Sales" icon="shopping-cart">
+    Number of individual sale transactions recorded for the current day.
+  </Card>
+  <Card title="Units Sold" icon="boxes-stacked">
+    Total quantity of items sold across all transactions today.
+  </Card>
+  <Card title="Total Products" icon="warehouse">
+    Count of all products currently registered in your inventory.
+  </Card>
+  <Card title="Last Sale Amount" icon="money-bill">
+    The total value of the most recent sale, along with its ID and timestamp.
+  </Card>
+</CardGroup>
+
+All four metric cards update automatically as you record new sales — no manual refresh needed.
+
+## Weekly Activity Chart
+
+Below the metrics, the **Actividad Semanal** bar chart plots total sales revenue for each of the past 7 days (today plus the previous 6). 
+
+- The horizontal axis shows abbreviated day names in Spanish (Lun, Mar, Mié…).
+- The vertical axis displays amounts in Soles (S/).
+- The chart is rendered with the [Vico](https://github.com/patrykandpatryk/vico) library using a column chart layout.
+- Days with no sales show a zero-height bar, so you always see the full week at a glance.
+
+## Low-Stock Alert Banner
+
+If any product has fewer than **10 units** in stock, a warning banner appears automatically between the chart and the quick-access section. The banner lists up to 3 of the most critical items (sorted by lowest stock first), each showing its name and remaining quantity.
+
+Tap **Ver todos** (or **Ver** on small screens) to navigate directly to the Products screen filtered to your full inventory.
+
+<Warning>
+  The low-stock banner only disappears when all products have 10 or more units. Restock items through the Purchases module to clear the alert.
+</Warning>
+
+## Quick-Access Shortcuts
+
+The **Acceso Rápido** section at the bottom contains four cards that navigate directly to the app's main workflows:
+
+| Card | Label | Destination |
+|---|---|---|
+| Productos | Gestionar | Products list |
+| Ventas | Registrar | Sales screen |
+| Compras | Registrar | Purchases screen |
+| Cierre de Caja | Ver | Cash Closure screen |
+
+Tap any card to go directly to that module.
+
+## Navigating with the Drawer
+
+Every screen in Bodequita, including the Dashboard, has a hamburger menu icon (☰) in the top-left corner. Tapping it opens the **navigation drawer** which lists all six sections of the app:
+
+| Menu Item | Route | Icon |
+|---|---|---|
+| Panel | `dashboard` | Dashboard |
+| Productos | `products` | Inventory |
+| Ventas | `sales` | Shopping Cart |
+| Compras | `purchases` | Add Shopping Cart |
+| Cierre | `cash_closure` | Account Balance |
+| Perfil | `profile` | Person |
+
+The currently active screen is highlighted in the drawer. Tapping any item navigates directly to that section and closes the drawer automatically.
+
+<Tip>
+  You can also reach Products, Sales, Purchases, and Cash Closure directly from the Quick-Access cards without opening the drawer.
+</Tip>

@@ -1,0 +1,82 @@
+---
+title: Cash Closure
+description: View today's financial summary — total sales income, total purchase expenses, net profit, transaction count, and average ticket — and export or reset the day's data.
+---
+
+The **Cash Closure** screen (Cierre de Caja) gives you a complete end-of-day financial picture. All figures are calculated in real time from today's sales and purchase records.
+
+## What the Cash Closure Shows
+
+<CardGroup cols={2}>
+  <Card title="Total Ventas" icon="trending-up">
+    Total income from all sales recorded today, in Soles (S/).
+  </Card>
+  <Card title="Total Compras" icon="trending-down">
+    Total expenses from all purchases registered today, in Soles (S/).
+  </Card>
+  <Card title="Ganancia Neta" icon="money-bill">
+    Net profit for the day, calculated as **Total Ventas − Total Compras**. Also shows the profit margin percentage.
+  </Card>
+  <Card title="Transacciones" icon="shopping-cart">
+    Number of individual sale transactions completed today.
+  </Card>
+</CardGroup>
+
+## Detailed Summary
+
+Below the metric cards, the **Resumen Detallado** section shows:
+
+| Field | Description |
+|---|---|
+| Total de Ingresos | Same as Total Ventas — all revenue from today's sales |
+| Total de Egresos | Same as Total Compras — all costs from today's purchases |
+| Ganancia Neta del Día | Ingresos − Egresos, displayed prominently |
+| Ticket Promedio | Average sale value = Total Ventas ÷ Number of transactions |
+| Margen de Ganancia | Net profit as a percentage of total sales |
+
+## How Figures Are Calculated
+
+All totals are derived from the current day's database records:
+
+- **Sales total** — `saleDao.todaySalesTotal()` sums the `total` column of all `venta` records with today's date.
+- **Purchases total** — `purchaseDao.todayPurchasesTotal()` sums the `total` column of all `compra` records with today's date.
+- **Net income** — combined reactively: `salesTotal - purchasesTotal`.
+- **Average ticket** — `salesTotal ÷ salesCount` (returns 0 when no sales exist).
+- **Profit margin** — `(netIncome / salesTotal) × 100`, formatted to one decimal place.
+
+All flows update in real time. If you complete a new sale while the Cash Closure screen is open, the totals update automatically without requiring a refresh.
+
+## Generating a Report
+
+Tap **Generar Reporte** to create a CSV file containing today's summary data:
+
+```
+Concepto,Valor
+Total Ventas,<value>
+Total Compras,<value>
+Ganancia Neta,<value>
+Cantidad de Ventas,<value>
+Ticket Promedio,<value>
+```
+
+The app generates the file in the device's cache directory and immediately opens the Android share sheet, letting you send the CSV via email, WhatsApp, Google Drive, or any other sharing target.
+
+<Tip>
+  Always generate the report before resetting the day. Once the day is reset, the historical data for that day is deleted.
+</Tip>
+
+## Resetting the Day
+
+Tap **Reiniciar Día** to clear today's sales, purchases, and movement records from the database. While the reset is running, the button shows a spinner and the label changes to *"Reiniciando…"*.
+
+<Warning>
+  **Reiniciar Día is irreversible.** This action permanently deletes all of today's sale records (`venta`), purchase records (`compra`), and inventory movement records from the database. Export your report first.
+</Warning>
+
+## Inventory Movements
+
+The Cash Closure ViewModel also tracks `MovimientoInventario` records via `movementDao.todayMovements()`. These manual movement entries provide an audit trail of stock adjustments made outside of normal sales or purchase flows, and are included in the day-reset operation.
+
+## Viewing a Specific Day's Closure
+
+The current implementation shows the **live today** view — all totals are scoped to the current calendar day using timestamp comparisons in the DAO queries. Historical day-by-day browsing is not yet available through the UI; use the exported CSV reports to retain a record of each day before resetting.

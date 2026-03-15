@@ -1,0 +1,494 @@
+---
+title: 'ViewModels'
+description: 'ViewModel classes that manage UI state and business logic for each screen in Bodequita.'
+---
+
+All ViewModels extend `androidx.lifecycle.ViewModel` and expose state via `StateFlow` or `SharedFlow`. Each has a corresponding `ViewModelProvider.Factory` for constructor injection.
+
+**Common patterns:**
+
+| Pattern | Usage |
+|---|---|
+| `StateFlow<T>` | Persistent state held across recompositions. Initialized with a default value. |
+| `SharedFlow<String>` | One-shot UI events (snackbar messages). `extraBufferCapacity = 1` prevents suspension. |
+| `SharingStarted.WhileSubscribed(5_000)` | Upstream Flow collection stops 5 seconds after the last subscriber, saving resources. |
+| `viewModelScope.launch { }` | All suspend calls are launched here and are automatically cancelled on ViewModel clear. |
+
+<AccordionGroup>
+
+  <Accordion title="ProductViewModel">
+
+**Package:** `com.trabajo.minitienda.viewmodel`
+
+Manages the product catalogue screen. Keeps a live list of all products and exposes upsert/delete/update operations.
+
+### Factory
+
+```kotlin
+class ProductViewModelFactory(
+    private val repository: ProductRepository
+) : ViewModelProvider.Factory
+```
+
+<ParamField path="repository" type="ProductRepository" required>
+  Injected at construction time via the factory.
+</ParamField>
+
+### State properties
+
+```kotlin
+val products: StateFlow<List<Product>>
+val events: SharedFlow<String>
+```
+
+| Property | Type | Initial value | Description |
+|---|---|---|---|
+| `products` | `StateFlow<List<Product>>` | `emptyList()` | Live product list from Room, sorted by name. |
+| `events` | `SharedFlow<String>` | — | One-shot UI messages (e.g. "Producto guardado"). |
+
+### Methods
+
+```kotlin
+fun upsertProduct(product: Product)
+fun deleteProduct(product: Product)
+fun updateProduct(product: Product)
+```
+
+| Method | Behaviour |
+|---|---|
+| `upsertProduct(product)` | Calls `repository.upsertByCode(product)`. Emits `"Producto guardado"` on success or an error message on failure. |
+| `deleteProduct(product)` | Calls `repository.deleteProduct(product)`. Fire-and-forget; no event emitted. |
+| `updateProduct(product)` | Calls `repository.updateProduct(product)`. Full row replacement by primary key. |
+
+```kotlin
+fun upsertProduct(product: Product) = viewModelScope.launch {
+    try {
+        repository.upsertByCode(product)
+        _events.tryEmit("Producto guardado")
+    } catch (e: Exception) {
+        _events.tryEmit("Error al guardar: ${e.message ?: "desconocido"}")
+    }
+}
+```
+
+  </Accordion>
+
+  <Accordion title="SalesViewModel">
+
+**Package:** `com.trabajo.minitienda.viewmodel`
+
+Manages the sales screen. Maintains an in-memory cart, computes a running total, and finalizes the sale in a single repository transaction.
+
+### Factory
+
+```kotlin
+class SalesViewModelFactory(
+    private val repo: SaleRepository,
+    private val productDao: ProductDao
+) : ViewModelProvider.Factory
+```
+
+<ParamField path="repo" type="SaleRepository" required>
+  Used to finalize sales and load weekly summary data.
+</ParamField>
+
+<ParamField path="productDao" type="ProductDao" required>
+  Used directly to look up products by barcode/code when adding to the cart.
+</ParamField>
+
+### State properties
+
+```kotlin
+val cart: StateFlow<List<SaleRepository.CartItem>>
+val total: StateFlow<Double>
+val events: SharedFlow<String>
+val weeklySales: StateFlow<List<DailySaleSummary>>
+```
+
+| Property | Type | Initial value | Description |
+|---|---|---|---|
+| `cart` | `StateFlow<List<CartItem>>` | `emptyList()` | Current cart contents. |
+| `total` | `StateFlow<Double>` | `0.0` | Running sum of all `CartItem.subtotal` values. |
+| `events` | `SharedFlow<String>` | — | One-shot UI messages. |
+| `weeklySales` | `StateFlow<List<DailySaleSummary>>` | `emptyList()` | 7-day rolling daily totals; loaded in `init`. |
+
+### Methods
+
+```kotlin
+fun addByCode(code: String, qty: Int)
+fun addByCodeSafe(code: String, qty: Int)
+fun changeQty(productId: Int, qty: Int)
+fun remove(productId: Int)
+fun clearCart()
+fun finalizeSale()
+```
+
+| Method | Behaviour |
+|---|---|
+| `addByCode(code, qty)` | Looks up product by code (uppercase). Merges with existing cart line if product already present; otherwise adds a new `CartItem`. Emits event on unknown code or invalid qty. |
+| `addByCodeSafe(code, qty)` | Validates `code` is not blank and `qty > 0` before delegating to `addByCode`. Catches exceptions and emits an error event instead of crashing. |
+| `changeQty(productId, qty)` | Updates the quantity of an existing cart line. Coerces the value to at least 1. |
+| `remove(productId)` | Removes a cart line by product id. |
+| `clearCart()` | Empties the cart. |
+| `finalizeSale()` | Calls `repo.makeSale(cart.value)`. On success, clears the cart and emits `"Venta realizada (#<id>)"`. On failure (e.g. insufficient stock), emits the exception message. |
+
+```kotlin
+fun finalizeSale() = viewModelScope.launch {
+    try {
+        val id = repo.makeSale(_cart.value)
+        clearCart()
+        _events.tryEmit("Venta realizada (#$id)")
+    } catch (e: Exception) {
+        _events.tryEmit(e.message ?: "Error al registrar la venta")
+    }
+}
+```
+
+### Weekly sales loading
+
+On `init`, `SalesViewModel` computes a timestamp for 6 days ago (start of day) and subscribes to `repo.getWeeklySalesSummary(timestamp)`. The result is collected into `weeklySales`.
+
+  </Accordion>
+
+  <Accordion title="PurchasesViewModel">
+
+**Package:** `com.trabajo.minitienda.viewmodel`
+
+Manages the purchases screen. Supports two cart modes: a **resolved cart** (products already in the database, identified by code) and a **draft cart** (products identified by name or code that may not yet exist in the database).
+
+### Factory
+
+```kotlin
+class PurchasesViewModelFactory(
+    private val repo: PurchaseRepository,
+    private val productDao: ProductDao,
+    private val supplierDao: SupplierDao
+) : ViewModelProvider.Factory
+```
+
+<ParamField path="repo" type="PurchaseRepository" required>
+  Used to finalize purchases.
+</ParamField>
+
+<ParamField path="productDao" type="ProductDao" required>
+  Used to look up or auto-create products during purchase intake.
+</ParamField>
+
+<ParamField path="supplierDao" type="SupplierDao" required>
+  Used to load the supplier dropdown and create new suppliers inline.
+</ParamField>
+
+### State properties
+
+```kotlin
+val suppliers: StateFlow<List<Supplier>>
+val cart: StateFlow<List<PurchaseRepository.CartItem>>
+val total: StateFlow<Double>
+val events: SharedFlow<String>
+val draftCart: StateFlow<List<DraftLine>>
+val draftTotal: StateFlow<Double>
+```
+
+| Property | Type | Initial value | Description |
+|---|---|---|---|
+| `suppliers` | `StateFlow<List<Supplier>>` | `emptyList()` | Live supplier list for the picker. |
+| `cart` | `StateFlow<List<CartItem>>` | `emptyList()` | Resolved cart — products exist in DB. |
+| `total` | `StateFlow<Double>` | `0.0` | Running total for resolved cart. |
+| `events` | `SharedFlow<String>` | — | One-shot UI messages. |
+| `draftCart` | `StateFlow<List<DraftLine>>` | `emptyList()` | Draft cart — products identified by name/code string. |
+| `draftTotal` | `StateFlow<Double>` | `0.0` | Running total for draft cart. |
+
+### Nested type — DraftLine
+
+```kotlin
+data class DraftLine(
+    val nameOrCode: String,
+    val qty: Int,
+    val cost: Double
+)
+```
+
+### Methods
+
+```kotlin
+fun addByCode(code: String, qty: Int, cost: Double)
+fun remove(productId: Int, cost: Double)
+fun clearCart()
+fun upsertSupplierByRuc(ruc: String, nombre: String, telefono: String?)
+fun addDraftLine(nameOrCode: String, qty: Int, cost: Double)
+fun removeDraftLine(nameOrCode: String, cost: Double)
+fun clearDraftCart()
+fun finalizeDraftPurchase(supplierId: Int)
+```
+
+| Method | Behaviour |
+|---|---|
+| `addByCode(code, qty, cost)` | Looks up product by code (uppercase). Merges with existing line if same product and cost; otherwise appends. Validates qty and cost. |
+| `remove(productId, cost)` | Removes a resolved cart line matching both product id and cost. |
+| `clearCart()` | Empties the resolved cart. |
+| `upsertSupplierByRuc(ruc, nombre, telefono)` | Calls `supplierDao.insertIgnore()`. Emits `"El proveedor ya existe"` if insert returns `-1`, or `"Proveedor guardado"` on success. |
+| `addDraftLine(nameOrCode, qty, cost)` | Appends or merges a `DraftLine` by case-insensitive name match and cost equality. |
+| `removeDraftLine(nameOrCode, cost)` | Removes a draft line by case-insensitive name and cost. |
+| `clearDraftCart()` | Empties the draft cart. |
+| `finalizeDraftPurchase(supplierId)` | Materializes draft lines into resolved `CartItem`s, auto-creating missing products via `insertIgnoreMinimal` + `updateByCode`, then calls `repo.makePurchase()`. Emits result event. |
+
+#### `finalizeDraftPurchase` — auto-creation logic
+
+For each `DraftLine`:
+1. Looks up product by `code = nameOrCode.uppercase()`.
+2. If not found, calls `productDao.insertIgnoreMinimal(code, name, price=cost, stock=0, desc="")` followed by `productDao.updateByCode(...)` to ensure name and price are current.
+3. Re-fetches the product. If still `null`, emits an error and continues to the next line.
+4. If found, calls `productDao.updateByCode(...)` to update the reference price.
+5. Adds the resolved product to the items list and calls `repo.makePurchase(supplierId, items)`.
+
+  </Accordion>
+
+  <Accordion title="CashClosureViewModel">
+
+**Package:** `com.trabajo.minitienda.viewmodel`
+
+Aggregates today's financial summary and provides the end-of-day cash closure actions: reset (delete today's records) and CSV report generation.
+
+### Factory
+
+```kotlin
+class CashClosureViewModelFactory(
+    private val saleDao: SaleDao,
+    private val purchaseDao: PurchaseDao,
+    private val movementDao: MovementDao
+) : ViewModelProvider.Factory
+```
+
+<ParamField path="saleDao" type="SaleDao" required>
+  Source for today's sales totals and transaction count.
+</ParamField>
+
+<ParamField path="purchaseDao" type="PurchaseDao" required>
+  Source for today's purchase totals.
+</ParamField>
+
+<ParamField path="movementDao" type="MovementDao" required>
+  Source for today's inventory movement log.
+</ParamField>
+
+### State properties
+
+```kotlin
+val salesTotal: StateFlow<Double>
+val salesCount: StateFlow<Int>
+val purchasesTotal: StateFlow<Double>
+val netIncome: StateFlow<Double>
+val avgTicket: StateFlow<Double>
+val movementsToday: StateFlow<List<MovimientoInventario>>
+```
+
+| Property | Type | Initial value | Source |
+|---|---|---|---|
+| `salesTotal` | `StateFlow<Double>` | `0.0` | `saleDao.todaySalesTotal()` |
+| `salesCount` | `StateFlow<Int>` | `0` | `saleDao.todaySalesCount()` |
+| `purchasesTotal` | `StateFlow<Double>` | `0.0` | `purchaseDao.todayPurchasesTotal()` |
+| `netIncome` | `StateFlow<Double>` | `0.0` | `combine(salesTotal, purchasesTotal) { s, p -> s - p }` |
+| `avgTicket` | `StateFlow<Double>` | `0.0` | `combine(salesTotal, salesCount) { s, c -> if (c <= 0) 0.0 else s / c }` |
+| `movementsToday` | `StateFlow<List<MovimientoInventario>>` | `emptyList()` | `movementDao.todayMovements()` |
+
+### Methods
+
+```kotlin
+fun resetDay(onDone: () -> Unit)
+fun generateReport(context: Context, onDone: (Uri?) -> Unit)
+```
+
+#### `resetDay(onDone)`
+
+Deletes all of today's records from `venta`, `compra`, and `movimiento_inventario`, then invokes `onDone` on the main thread.
+
+```kotlin
+fun resetDay(onDone: () -> Unit) = viewModelScope.launch {
+    saleDao.deleteTodaySales()
+    purchaseDao.deleteTodayPurchases()
+    movementDao.deleteTodayMovements()
+    onDone()
+}
+```
+
+<Warning>
+`resetDay` permanently deletes today's data. There is no undo. The UI should present a confirmation dialog before calling this method.
+</Warning>
+
+#### `generateReport(context, onDone)`
+
+Writes a CSV file named `reporte_cierre.csv` to the app's cache directory with the following rows:
+
+| Row | Value |
+|---|---|
+| `Total Ventas` | `salesTotal.value` |
+| `Total Compras` | `purchasesTotal.value` |
+| `Ganancia Neta` | `netIncome.value` |
+| `Cantidad de Ventas` | `salesCount.value` |
+| `Ticket Promedio` | `avgTicket.value` |
+
+A `content://` URI is generated via `FileProvider` and passed to `onDone`. If an exception occurs, `onDone(null)` is called.
+
+  </Accordion>
+
+  <Accordion title="DashboardViewModel">
+
+**Package:** `com.trabajo.minitienda.viewmodel`
+
+Provides the three dashboard metrics: today's transaction count, today's units sold, and a brief summary of the most recent sale.
+
+### Factory
+
+```kotlin
+class DashboardViewModelFactory(
+    private val saleDao: SaleDao
+) : ViewModelProvider.Factory
+```
+
+<ParamField path="saleDao" type="SaleDao" required>
+  The only data source for this ViewModel.
+</ParamField>
+
+### State properties
+
+```kotlin
+val todaySalesCount: StateFlow<Int>
+val todayUnitsSold: StateFlow<Int>
+val lastSaleBrief: StateFlow<SaleBrief?>
+```
+
+| Property | Type | Initial value | Source |
+|---|---|---|---|
+| `todaySalesCount` | `StateFlow<Int>` | `0` | `saleDao.todaySalesCount()` |
+| `todayUnitsSold` | `StateFlow<Int>` | `0` | `saleDao.todayUnitsSold()` |
+| `lastSaleBrief` | `StateFlow<SaleBrief?>` | `null` | `saleDao.lastSaleBrief()` |
+
+`DashboardViewModel` has no public methods — it is read-only. All properties update reactively as the `venta` and `detalle_venta` tables change.
+
+### SaleBrief
+
+`SaleBrief` is a lightweight projection (not a Room entity) used to surface the last sale without loading the full `SaleWithDetails` graph.
+
+```kotlin
+data class SaleBrief(
+    val id: Long,
+    val total: Double,
+    val fecha: Long
+) {
+    val fechaString: String
+        get() {
+            if (fecha == 0L) return "-"
+            val df = SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault())
+            return df.format(Date(fecha))
+        }
+}
+```
+
+  </Accordion>
+
+  <Accordion title="CategoryViewModel">
+
+**Package:** `com.trabajo.minitienda.viewmodel`
+
+Manages the category screen. Exposes the live category list and two write operations.
+
+### Factory
+
+```kotlin
+class CategoryViewModelFactory(
+    private val repo: CategoryRepository
+) : ViewModelProvider.Factory
+```
+
+<ParamField path="repo" type="CategoryRepository" required>
+  Injected at construction time via the factory.
+</ParamField>
+
+### State properties
+
+```kotlin
+val categories: StateFlow<List<Category>>
+```
+
+| Property | Type | Initial value | Description |
+|---|---|---|---|
+| `categories` | `StateFlow<List<Category>>` | `emptyList()` | Live category list sorted by `nombre ASC`. |
+
+### Methods
+
+```kotlin
+fun add(nombre: String)
+fun delete(id: Long)
+```
+
+| Method | Behaviour |
+|---|---|
+| `add(nombre)` | Calls `repo.add(nombre)` which delegates to `dao.upsertByName()`. Silently ignores duplicates. |
+| `delete(id)` | Calls `repo.delete(id)` which delegates to `dao.deleteById(id)`. |
+
+  </Accordion>
+
+  <Accordion title="SupplierViewModel">
+
+**Package:** `com.trabajo.minitienda.viewmodel`
+
+Manages the supplier screen. Exposes the live supplier list and three write operations.
+
+### Factory
+
+```kotlin
+class SupplierViewModelFactory(
+    private val dao: SupplierDao
+) : ViewModelProvider.Factory
+```
+
+<ParamField path="dao" type="SupplierDao" required>
+  `SupplierViewModel` calls the DAO directly — there is no intermediate repository.
+</ParamField>
+
+### State properties
+
+```kotlin
+val suppliers: StateFlow<List<Supplier>>
+val events: SharedFlow<String>
+```
+
+| Property | Type | Initial value | Description |
+|---|---|---|---|
+| `suppliers` | `StateFlow<List<Supplier>>` | `emptyList()` | Live supplier list sorted by `nombre ASC`. |
+| `events` | `SharedFlow<String>` | — | One-shot UI messages. |
+
+### Methods
+
+```kotlin
+fun addSupplier(ruc: String, nombre: String, telefono: String?)
+fun renameSupplier(id: Int, nuevoNombre: String)
+fun deleteSupplier(supplier: Supplier)
+```
+
+| Method | Behaviour |
+|---|---|
+| `addSupplier(ruc, nombre, telefono)` | Trims all inputs. Validates `ruc` and `nombre` are non-blank. Calls `supplierDao.insertIgnore()`. Emits `"El proveedor ya existe (RUC o nombre)"` if insert returns `-1`, otherwise `"Proveedor agregado"`. |
+| `renameSupplier(id, nuevoNombre)` | Trims `nuevoNombre`; returns early if blank. Calls `supplierDao.rename(id, nuevo)`. Emits `"Proveedor actualizado"`. |
+| `deleteSupplier(supplier)` | Calls `supplierDao.delete(supplier)`. Emits `"Proveedor eliminado"`. |
+
+```kotlin
+fun addSupplier(ruc: String, nombre: String, telefono: String?) = viewModelScope.launch {
+    val r = ruc.trim()
+    val n = nombre.trim()
+    val t = telefono?.trim().takeUnless { it.isNullOrBlank() }
+
+    if (r.isBlank() || n.isBlank()) {
+        _events.tryEmit("RUC y nombre son obligatorios")
+        return@launch
+    }
+
+    val id = supplierDao.insertIgnore(Supplier(ruc = r, nombre = n, telefono = t))
+    if (id == -1L) _events.tryEmit("El proveedor ya existe (RUC o nombre)")
+    else _events.tryEmit("Proveedor agregado")
+}
+```
+
+  </Accordion>
+
+</AccordionGroup>

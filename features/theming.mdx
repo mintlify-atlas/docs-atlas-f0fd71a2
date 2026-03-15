@@ -1,0 +1,152 @@
+---
+title: Theming
+description: Bodequita supports light and dark themes powered by Material Design 3. Users can switch themes from the Profile screen, and the preference persists across app restarts.
+---
+
+Bodequita uses **Material Design 3** (Material You) with two hand-crafted colour schemes — light and dark — built on a green-centric brand palette. The active theme persists between app sessions using `SharedPreferences`.
+
+## Switching the Theme
+
+Users can toggle between light and dark mode from the **Profile** screen:
+
+<Steps>
+  <Step title="Open the Profile screen">
+    Tap **Perfil** in the navigation drawer.
+  </Step>
+  <Step title="Locate the Theme setting">
+    Scroll to the **Configuraciones** card. The **Tema** row shows the current state (e.g., *"Modo claro activado"* or *"Modo oscuro activado"*) and a toggle switch.
+  </Step>
+  <Step title="Toggle the theme">
+    Tap the switch (or tap anywhere on the Tema row) to flip between light and dark mode. The entire app re-renders immediately with the new colour scheme.
+  </Step>
+</Steps>
+
+The change takes effect instantly across all screens because the theme state is held in a `StateFlow` that the root `MiniTiendaTheme` composable observes.
+
+## ThemeManager
+
+`ThemeManager` is a utility class that owns the theme preference:
+
+```kotlin
+class ThemeManager(context: Context) {
+    private val prefs = context.getSharedPreferences("mini_tienda_theme", Context.MODE_PRIVATE)
+    private val THEME_KEY = "is_dark_theme"
+
+    private val _isDarkTheme = MutableStateFlow(getSavedTheme())
+    val isDarkTheme: StateFlow<Boolean> = _isDarkTheme.asStateFlow()
+
+    fun toggleTheme() {
+        val newTheme = !_isDarkTheme.value
+        _isDarkTheme.value = newTheme
+        prefs.edit().putString(THEME_KEY, newTheme.toString()).apply()
+    }
+
+    fun setTheme(isDark: Boolean) {
+        _isDarkTheme.value = isDark
+        prefs.edit().putBoolean(THEME_KEY, isDark).apply()
+    }
+}
+```
+
+- **Default**: Light mode (`false`) when the app is first installed.
+- **Persistence**: The preference is read from `SharedPreferences` on startup so the last-used theme is restored automatically.
+- **API**: `toggleTheme()` flips the current value; `setTheme(isDark)` sets it directly.
+
+The `ThemeManager` instance is created in `MainActivity` and passed through `MainNavigation` to `ProfileScreen`.
+
+## Colour Palette
+
+### Brand and Status Colours
+
+| Token | Hex | Usage |
+|---|---|---|
+| `PrimaryGreen` | `#16A34A` | Primary actions, icons, badges, top-bar menu icon |
+| `PrimaryGreenHover` | `#22C55E` | Hover/secondary green accents |
+| `WarningColor` | `#F97316` | Low-stock banner, "Stock Bajo" badge |
+| `WarningColorDark` | `#EA580C` | Darker warning shade |
+| `ErrorColor` | `#DC2626` | "Sin Stock" badge, delete icons, error messages |
+| `SuccessColor` | `#16A34A` | Same green as primary — success states |
+
+### Background and Surface Colours
+
+| Token | Hex | Usage |
+|---|---|---|
+| `BackgroundStart` | `#FAFAF8` | Page background (warm stone-50) |
+| `BackgroundEnd` | `#F5F5F4` | Secondary background (stone-100) |
+| `CardBackground` | `#FFFFFF` | Card surfaces, `onPrimary` |
+| `SecondaryBackground` | `#F5F5F0` | Alternate section backgrounds |
+| `InputBackground` | `#F9FAF8` | Text field fill colour |
+
+### Text Colours
+
+| Token | Hex | Usage |
+|---|---|---|
+| `PrimaryText` | `#1A1F16` | Main body and heading text |
+| `SecondaryText` | `#6B7164` | Subtitles, helper text, metadata |
+
+### Chart Colours
+
+| Token | Hex | Usage |
+|---|---|---|
+| `ChartGreen1` | `#16A34A` | Primary chart bars |
+| `ChartGreen2` | `#22C55E` | Secondary chart elements |
+| `ChartGreen3` | `#4ADE80` | Tertiary chart elements |
+| `ChartGreen4` | `#86EFAC` | Fourth-level chart fill |
+| `ChartGreen5` | `#BBF7D0` | Lightest chart fill |
+
+## Light and Dark Colour Schemes
+
+<Tabs>
+  <Tab title="Light Theme">
+    | Role | Colour |
+    |---|---|
+    | `primary` | `PrimaryGreen` (#16A34A) |
+    | `secondary` | `PrimaryGreenHover` (#22C55E) |
+    | `background` | `BackgroundStart` (#FAFAF8) |
+    | `surface` | `CardBackground` (#FFFFFF) |
+    | `error` | `ErrorColor` (#DC2626) |
+    | `onPrimary` | White (#FFFFFF) |
+    | `onBackground` / `onSurface` | `PrimaryText` (#1A1F16) |
+    | `onError` | White (#FFFFFF) |
+  </Tab>
+  <Tab title="Dark Theme">
+    | Role | Colour |
+    |---|---|
+    | `primary` | #66BB6A (lighter green) |
+    | `secondary` | #81C784 (lighter green hover) |
+    | `background` | #121212 (near-black) |
+    | `surface` | #1E1E1E (dark card) |
+    | `error` | #EF5350 (brighter red) |
+    | `onPrimary` | #1A1A1A (dark text on green) |
+    | `onBackground` / `onSurface` | #E0E0E0 (light grey text) |
+    | `onError` | White (#FFFFFF) |
+  </Tab>
+</Tabs>
+
+## Material Design 3 Integration
+
+The `MiniTiendaTheme` composable wraps `MaterialTheme` with the selected colour scheme:
+
+```kotlin
+@Composable
+fun MiniTiendaTheme(
+    darkTheme: Boolean = isSystemInDarkTheme(),
+    content: @Composable () -> Unit
+) {
+    val colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme
+    // Status bar colour synced to primary
+    MaterialTheme(
+        colorScheme = colorScheme,
+        typography = Typography,
+        content = content
+    )
+}
+```
+
+- The **status bar** colour is updated to match `colorScheme.primary` via a `SideEffect`.
+- Status bar icon lightness is inverted for dark mode (`isAppearanceLightStatusBars = !darkTheme`).
+- All Material 3 components (`Card`, `Button`, `TextField`, `Switch`, `NavigationDrawerItem`, etc.) automatically pick up the active colour scheme tokens.
+
+<Info>
+  The `darkTheme` parameter defaults to `isSystemInDarkTheme()` but the `ThemeManager` preference takes precedence when passed explicitly from `MainActivity`, so user choice overrides the system setting.
+</Info>

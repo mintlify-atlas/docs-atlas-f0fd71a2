@@ -1,0 +1,110 @@
+---
+title: Navigation
+description: How Bodequita's navigation works — the modal drawer, all screen routes, and the login flow that serves as the app's entry point.
+---
+
+Bodequita uses **Jetpack Compose Navigation** with a single `NavHost` and a `ModalNavigationDrawer` that is accessible from every authenticated screen.
+
+## The Navigation Drawer
+
+The drawer is a `ModalNavigationDrawer` that slides in from the left edge of the screen. It contains six items:
+
+| Menu Item | Route | Icon |
+|---|---|---|
+| Panel | `dashboard` | Dashboard |
+| Productos | `products` | Inventory |
+| Ventas | `sales` | Shopping Cart |
+| Compras | `purchases` | Add Shopping Cart |
+| Cierre | `cash_closure` | Account Balance |
+| Perfil | `profile` | Person |
+
+The currently active route is highlighted automatically so you always know where you are.
+
+### Opening the Drawer
+
+Every screen in the app (except the Login screen) includes a `TopBar` with a **hamburger menu icon** (☰) tinted in `PrimaryGreen` at the top-left corner. Tapping this icon opens the drawer.
+
+The `TopBar` passes an `onMenuClick` lambda down from `MainNavigation`, which calls `drawerState.open()` via a coroutine scope.
+
+### Drawer Behaviour
+
+- Tapping a drawer item navigates to that route with `launchSingleTop = true`, preventing duplicate screens on the back stack.
+- The drawer closes automatically after a navigation item is selected.
+- The drawer can also be closed by swiping it back or tapping outside its bounds.
+
+## All Navigation Routes
+
+| Route | Screen | Notes |
+|---|---|---|
+| `login` | Login | Start destination |
+| `dashboard` | Dashboard (Panel de Control) | Main home screen |
+| `products` | Product List | Browse and search all products |
+| `product_registration` | New Product Form | No arguments — creates a new product |
+| `product_registration/{productId}` | Edit Product Form | `productId` (Int) selects the product to edit |
+| `sales` | Sales Screen | Record a sale |
+| `purchases` | Purchases Screen | Register a purchase |
+| `cash_closure` | Cash Closure | Today's financial summary |
+| `profile` | Profile | User info, store details, theme settings |
+
+### Product Registration Routes
+
+The product form has two variants:
+
+- **`product_registration`** — Opens a blank form to create a new product.
+- **`product_registration/{productId}`** — Opens the same form pre-filled with the data of the product whose `id` matches `productId`. The `productId` argument is typed as `NavType.StringType` and converted to `Int` at runtime.
+
+## Login Screen and Start Destination
+
+The `NavHost` defines `login` as the **startDestination**. This means the Login screen is always the first screen displayed when the app launches.
+
+<Steps>
+  <Step title="Enter credentials">
+    The Login screen presents two fields: **Usuario** (username) and **Contraseña** (password). The default credentials are username `admin` and the password stored in `SharedPreferences` (default: `1234`).
+  </Step>
+  <Step title="Authenticate">
+    Tap **Ingresar**. The button shows a loading spinner for ~800 ms while credentials are validated. On success, navigation moves to `dashboard` and the `login` route is popped from the back stack so the back button cannot return to the login screen.
+  </Step>
+  <Step title="Failed login">
+    If the username or password is wrong, an animated error banner appears beneath the password field with the message *"Usuario o contraseña incorrectos"*.
+  </Step>
+</Steps>
+
+### Changing the Admin Password
+
+From the Login screen, tap **Cambiar contraseña de admin** to open a dialog where you can update the password:
+
+1. Enter the current password.
+2. Enter and confirm the new password (minimum 4 characters).
+3. Tap **Cambiar** — a success animation confirms the change.
+
+Passwords are stored in `SharedPreferences` under the key `admin_password` using the `PasswordManager` helper class.
+
+### Logging Out
+
+From the **Profile** screen, tap **Cerrar Sesión** to navigate back to `login` and remove the `profile` route from the back stack, effectively ending the session.
+
+## Navigation Architecture
+
+```kotlin
+ModalNavigationDrawer(
+    drawerContent = { /* Six NavigationDrawerItem entries */ }
+) {
+    NavHost(navController, startDestination = "login") {
+        composable("login") { LoginScreen(...) }
+        composable("dashboard") { DashboardScreen(...) }
+        composable("products") { ProductListScreen(...) }
+        composable("product_registration/{productId}") { ProductRegistrationScreen(...) }
+        composable("product_registration") { ProductRegistrationScreen(...) }
+        composable("sales") { SalesScreen(...) }
+        composable("purchases") { PurchasesScreen(...) }
+        composable("cash_closure") { CashClosureScreen(...) }
+        composable("profile") { ProfileScreen(...) }
+    }
+}
+```
+
+All ViewModels are created once at the `MainNavigation` level and passed down to each composable, ensuring shared state (e.g., the product list and sales cart) persists across navigation events.
+
+<Note>
+  The `ModalNavigationDrawer` wraps the entire `NavHost`, so the drawer is always available regardless of the current screen — except that the Login screen does not show a `TopBar` and therefore has no hamburger menu button.
+</Note>

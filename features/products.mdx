@@ -1,0 +1,115 @@
+---
+title: Products
+description: Manage your entire product catalog — add, edit, delete, and search products, assign categories, and track stock levels in real time.
+---
+
+The **Products** screen (Productos) is where you maintain your store's inventory catalog. Every product you sell or purchase must be registered here first.
+
+## Viewing the Product List
+
+Open the Products screen from the drawer (**Productos**) or the Dashboard quick-access card. You'll see:
+
+- A **search bar** at the top that filters the list as you type.
+- A count of the current results (e.g., "12 Productos").
+- A **Nuevo Producto** button to add a new item.
+- A scrollable list of product cards.
+
+### Searching Products
+
+The search bar matches against three fields simultaneously:
+
+- **Name** — e.g., typing `arroz` finds "Arroz Extra"
+- **Code** — e.g., typing `PRD001`
+- **Description** — matches partial text in the product description
+
+The search is case-insensitive and updates results instantly. Tap the **×** icon in the search bar to clear the filter and show all products.
+
+### Product Card
+
+Each product is displayed as a card showing:
+
+- Product name and product code
+- A **stock badge** (color-coded):
+  - **Green / Disponible** — 10 or more units in stock
+  - **Orange / Stock Bajo** — 1–9 units (low stock)
+  - **Red / Sin Stock** — 0 units
+- Unit price in Soles (S/)
+- Current stock quantity
+- Edit and Delete action buttons
+
+## Adding a New Product
+
+Tap **Nuevo Producto** to open the product registration form.
+
+<Steps>
+  <Step title="Fill in product details">
+    Complete the following fields in the **Información del Producto** card:
+
+    | Field | Description | Required |
+    |---|---|---|
+    | Nombre del Producto | Product display name (e.g., "Arroz Extra") | Yes |
+    | Código | Unique product code, auto-uppercased (e.g., "P001") | Yes |
+    | Categoría | Select from existing categories or type a new one | No |
+    | Precio (S/) | Sale price per unit as a decimal number | Yes |
+    | Stock Inicial | Starting inventory quantity as a whole number | Yes |
+    | Descripción | Optional text description of the product | No |
+  </Step>
+  <Step title="Assign a category (optional)">
+    Tap the **Categoría** dropdown to:
+    - Select an existing category from the list.
+    - Type a new category name — if it doesn't exist yet, a **"➕ Crear"** option appears at the bottom of the dropdown. Tapping it creates the category immediately.
+    - Tap **Administrar categorías** to open the full category manager dialog where you can add or delete categories in bulk.
+  </Step>
+  <Step title="Save the product">
+    Tap **Guardar Producto**. The app validates that all required fields are filled and that the price and stock are valid numbers. If validation passes, the product is saved and you're returned to the product list.
+
+    If any required field is missing or invalid, a snackbar message appears: *"Completa todos los campos con valores válidos"*.
+  </Step>
+</Steps>
+
+<Note>
+  Product codes are always stored in uppercase. If you type `p001`, it is saved as `P001`.
+</Note>
+
+## Editing a Product
+
+<Steps>
+  <Step title="Tap the Edit icon">
+    On any product card, tap the green pencil icon (✏️) to open the registration form pre-filled with that product's data.
+  </Step>
+  <Step title="Modify the fields">
+    Update any of the fields: name, code, category, price, stock, or description.
+  </Step>
+  <Step title="Save changes">
+    Tap **Guardar Producto** to save. The product is updated in place using an upsert-by-code operation, so if you change the code to match an existing product, the records are merged.
+  </Step>
+</Steps>
+
+## Deleting a Product
+
+Tap the red trash icon (🗑️) on a product card to delete it immediately. There is no confirmation dialog — the product is removed from the list right away.
+
+<Warning>
+  Deleting a product that appears in existing sale or purchase records is restricted at the database level (`RESTRICT` foreign key). If a product is referenced in any sale or purchase detail, the deletion will fail silently. To remove such a product, you would first need to delete the related transactions.
+</Warning>
+
+## Managing Categories
+
+Categories help you organise products by type (e.g., Abarrotes, Limpieza, Bebidas). You can manage categories from within the product form:
+
+- **Inline creation**: Type a new name in the Categoría field and tap **➕ Crear "…"** in the dropdown.
+- **Category manager dialog**: Tap **Administrar categorías** to open a dialog where you can:
+  - Add a new category by typing a name and tapping **Agregar**.
+  - Delete any existing category by tapping its trash icon, then confirming.
+
+If a category is deleted, products that were assigned to it have their `category_id` set to `NULL` automatically (the database uses `SET_NULL` on delete).
+
+## Stock Management
+
+Stock levels are updated automatically by the app — you do not need to adjust them manually after initial setup:
+
+- **Sales**: When you complete a sale, the quantity sold is **subtracted** from each product's stock.
+- **Purchases**: When you register a purchase, the quantity received is **added** to each product's stock.
+- **Initial stock**: Set when you first create a product. You can also manually edit stock by editing the product and changing the Stock field.
+
+The Dashboard's low-stock banner warns you when any product drops below 10 units.

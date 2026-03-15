@@ -1,0 +1,375 @@
+---
+title: 'DAOs'
+description: 'Data Access Object interfaces that map Kotlin methods to SQL operations for every entity in Bodequita.'
+---
+
+Each DAO is an interface annotated with `@Dao`. Room generates the implementation at compile time. Methods annotated with `@Query` execute raw SQL; `@Insert`, `@Update`, and `@Delete` use Room's built-in statement generation.
+
+**Return type conventions:**
+
+| Return type | Meaning |
+|---|---|
+| `Flow<T>` | Reactive stream — re-emits whenever the underlying table changes. |
+| `suspend fun` | One-shot coroutine — must be called from a coroutine scope. |
+| Plain `fun` (non-suspend, non-Flow) | Synchronous — avoid on the main thread. |
+
+<Tabs>
+  <Tab title="ProductDao">
+
+`ProductDao` covers the `producto` table. It exposes reactive observation, standard CRUD, an upsert-by-code pattern, and an atomic stock-decrement used by the sales flow.
+
+```kotlin
+@Dao
+interface ProductDao {
+
+    // Reactive read — emits on every table change
+    @Query("SELECT * FROM producto ORDER BY name ASC")
+    fun observeAllProducts(): Flow<List<Product>>
+
+    // Diagnostic count
+    @Query("SELECT COUNT(*) FROM producto")
+    suspend fun countAll(): Int
+
+    // Standard CRUD
+    @Delete  suspend fun deleteProduct(product: Product)
+    @Update  suspend fun updateProduct(product: Product)
+
+    // Insert that silently skips duplicates (unique index on `code`)
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertIgnore(product: Product): Long
+
+    // Partial update by business key
+    @Query("""
+        UPDATE producto
+        SET name = :name, price = :price, stock = :stock, descripcion = :desc
+        WHERE code = :code
+    """)
+    suspend fun updateByCode(
+        name: String, price: Double, stock: Int, desc: String, code: String
+    ): Int
+
+    @Query("SELECT * FROM producto WHERE code = :code LIMIT 1")
+    suspend fun findByCode(code: String): Product?
+
+    // Atomic stock decrement — returns 0 if stock would go negative
+    @Query("UPDATE producto SET stock = stock - :qty WHERE id = :productId AND stock >= :qty")
+    suspend fun decreaseStock(productId: Int, qty: Int): Int
+
+    // Upsert: insert; if duplicate code, update instead
+    @Transaction
+    suspend fun upsertByCode(p: Product) {
+        val id = insertIgnore(p)
+        if (id == -1L) {
+            updateByCode(p.name, p.price, p.stock, p.descripcion, p.code)
+        }
+    }
+
+    // Minimal insert used when auto-creating products during purchase intake
+    @Query("""
+        INSERT OR IGNORE INTO producto (code, name, price, stock, descripcion)
+        VALUES (:code, :name, :price, :stock, :desc)
+    """)
+    suspend fun insertIgnoreMinimal(
+        code: String, name: String, price: Double, stock: Int, desc: String
+    )
+}
+```
+
+### Method reference
+
+| Method | Annotation | Returns | Notes |
+|---|---|---|---|
+| `observeAllProducts()` | `@Query` | `Flow<List<Product>>` | Sorted by `name ASC` |
+| `countAll()` | `@Query` | `suspend Int` | Diagnostic only |
+| `deleteProduct(product)` | `@Delete` | `suspend Unit` | Matches by primary key |
+| `updateProduct(product)` | `@Update` | `suspend Unit` | Matches by primary key |
+| `insertIgnore(product)` | `@Insert(IGNORE)` | `suspend Long` | Returns `-1` if code already exists |
+| `updateByCode(...)` | `@Query` | `suspend Int` | Rows affected (0 if code not found) |
+| `findByCode(code)` | `@Query` | `suspend Product?` | `null` if not found |
+| `decreaseStock(productId, qty)` | `@Query` | `suspend Int` | Returns `0` if insufficient stock |
+| `upsertByCode(p)` | `@Transaction` | `suspend Unit` | Insert-or-update by `code` |
+| `insertIgnoreMinimal(...)` | `@Query` | `suspend Unit` | Auto-creates products with stock=0 |
+
+  </Tab>
+  <Tab title="SaleDao">
+
+`SaleDao` operates on the `venta` and `detalle_venta` tables. It supports inserting complete sales, reactive observation, and several aggregations scoped to the current calendar day.
+
+```kotlin
+@Dao
+interface SaleDao {
+
+    @Insert
+    suspend fun insertSale(sale: Sale): Long
+
+    @Insert
+    suspend fun insertDetails(details: List<SaleDetail>)
+
+    // Full sale + line items, ordered newest first
+    @Transaction
+    @Query("SELECT * FROM venta ORDER BY fecha DESC")
+    fun observeSales(): Flow<List<SaleWithDetails>>
+
+    // 7-day rolling summary grouped by local date
+    @Query("""
+        SELECT
+            DATE(fecha / 1000, 'unixepoch', 'localtime') AS saleDate,
+            SUM(total) AS total
+        FROM venta
+        WHERE fecha >= :sevenDaysAgoTimestamp
+        GROUP BY saleDate
+        ORDER BY saleDate ASC
+    """)
+    fun getWeeklySalesSummary(sevenDaysAgoTimestamp: Long): Flow<List<DailySaleSummary>>
+
+    // Number of sale transactions today (local time)
+    @Query("""
+        SELECT COUNT(*)
+        FROM venta
+        WHERE DATE(fecha / 1000, 'unixepoch', 'localtime') = DATE('now','localtime')
+    """)
+    fun todaySalesCount(): Flow<Int>
+
+    // Gross revenue today
+    @Query("""
+        SELECT COALESCE(SUM(total), 0.0)
+        FROM venta
+        WHERE DATE(fecha / 1000, 'unixepoch', 'localtime') = DATE('now','localtime')
+    """)
+    fun todaySalesTotal(): Flow<Double>
+
+    // Total units sold today (sum of quantities across all line items)
+    @Query("""
+        SELECT COALESCE(SUM(d.cantidad), 0)
+        FROM detalle_venta d
+        INNER JOIN venta v ON v.id = d.sale_id
+        WHERE DATE(v.fecha / 1000, 'unixepoch', 'localtime') = DATE('now','localtime')
+    """)
+    fun todayUnitsSold(): Flow<Int>
+
+    // Most recent sale — id, total, fecha
+    @Query("""
+        SELECT v.id AS id, v.total AS total, v.fecha AS fecha
+        FROM venta v
+        ORDER BY v.fecha DESC
+        LIMIT 1
+    """)
+    fun lastSaleBrief(): Flow<SaleBrief?>
+
+    // Cash-closure: delete all today's sales
+    @Query("""
+        DELETE FROM venta
+        WHERE DATE(fecha / 1000, 'unixepoch', 'localtime') = DATE('now','localtime')
+    """)
+    suspend fun deleteTodaySales()
+}
+```
+
+### Method reference
+
+| Method | Returns | Notes |
+|---|---|---|
+| `insertSale(sale)` | `suspend Long` | Returns the new row ID |
+| `insertDetails(details)` | `suspend Unit` | Bulk insert of `SaleDetail` rows |
+| `observeSales()` | `Flow<List<SaleWithDetails>>` | `@Transaction` loads nested `items` list |
+| `getWeeklySalesSummary(timestamp)` | `Flow<List<DailySaleSummary>>` | Groups by local calendar date |
+| `todaySalesCount()` | `Flow<Int>` | Reactive transaction count |
+| `todaySalesTotal()` | `Flow<Double>` | Reactive gross revenue; `0.0` when empty |
+| `todayUnitsSold()` | `Flow<Int>` | Cross-join with `detalle_venta` |
+| `lastSaleBrief()` | `Flow<SaleBrief?>` | `null` if no sales exist |
+| `deleteTodaySales()` | `suspend Unit` | Used by cash-closure reset |
+
+  </Tab>
+  <Tab title="PurchaseDao">
+
+`PurchaseDao` operates on the `compra` and `detalle_compra` tables.
+
+```kotlin
+@Dao
+interface PurchaseDao {
+
+    @Insert
+    suspend fun insertPurchase(p: Purchase): Long
+
+    @Insert
+    suspend fun insertDetails(details: List<PurchaseDetail>)
+
+    // Full purchase + line items, ordered newest first
+    @Transaction
+    @Query("SELECT * FROM compra ORDER BY fecha DESC")
+    fun observePurchases(): Flow<List<PurchaseWithDetails>>
+
+    // Total spend today
+    @Query("""
+        SELECT COALESCE(SUM(total), 0.0)
+        FROM compra
+        WHERE DATE(fecha / 1000, 'unixepoch', 'localtime') = DATE('now','localtime')
+    """)
+    fun todayPurchasesTotal(): Flow<Double>
+
+    // Count of purchases today
+    @Query("""
+        SELECT COUNT(*)
+        FROM compra
+        WHERE DATE(fecha / 1000, 'unixepoch', 'localtime') = DATE('now','localtime')
+    """)
+    fun todayPurchasesCount(): Flow<Int>
+
+    // Cash-closure: delete all today's purchases
+    @Query("""
+        DELETE FROM compra
+        WHERE DATE(fecha / 1000, 'unixepoch', 'localtime') = DATE('now','localtime')
+    """)
+    suspend fun deleteTodayPurchases()
+}
+```
+
+### Method reference
+
+| Method | Returns | Notes |
+|---|---|---|
+| `insertPurchase(p)` | `suspend Long` | Returns new row ID |
+| `insertDetails(details)` | `suspend Unit` | Bulk insert of `PurchaseDetail` rows |
+| `observePurchases()` | `Flow<List<PurchaseWithDetails>>` | `@Transaction` loads nested `detalles` list |
+| `todayPurchasesTotal()` | `Flow<Double>` | Reactive total spend; `0.0` when empty |
+| `todayPurchasesCount()` | `Flow<Int>` | Reactive purchase count |
+| `deleteTodayPurchases()` | `suspend Unit` | Used by cash-closure reset |
+
+  </Tab>
+  <Tab title="SupplierDao">
+
+`SupplierDao` manages the `proveedor` table, which has unique constraints on both `ruc` and `nombre`.
+
+```kotlin
+@Dao
+interface SupplierDao {
+
+    @Query("SELECT * FROM proveedor ORDER BY nombre ASC")
+    fun observeAll(): Flow<List<Supplier>>
+
+    // Returns -1 if RUC or nombre already exists
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertIgnore(s: Supplier): Long
+
+    @Query("UPDATE proveedor SET nombre = :nuevo WHERE id = :id")
+    suspend fun rename(id: Int, nuevo: String): Int
+
+    @Query("SELECT * FROM proveedor WHERE ruc = :ruc LIMIT 1")
+    suspend fun findByRuc(ruc: String): Supplier?
+
+    @Query("UPDATE proveedor SET nombre = :nombre, telefono = :telefono WHERE ruc = :ruc")
+    suspend fun updateByRuc(ruc: String, nombre: String, telefono: String?): Int
+
+    @Delete
+    suspend fun delete(s: Supplier)
+}
+```
+
+### Method reference
+
+| Method | Returns | Notes |
+|---|---|---|
+| `observeAll()` | `Flow<List<Supplier>>` | Sorted by `nombre ASC` |
+| `insertIgnore(s)` | `suspend Long` | Returns `-1` on duplicate RUC or nombre |
+| `rename(id, nuevo)` | `suspend Int` | Rows updated (0 if id not found) |
+| `findByRuc(ruc)` | `suspend Supplier?` | Lookup by business tax ID |
+| `updateByRuc(ruc, nombre, telefono)` | `suspend Int` | Rows updated |
+| `delete(s)` | `suspend Unit` | Matches by primary key |
+
+  </Tab>
+  <Tab title="CategoryDao">
+
+`CategoryDao` manages the `categoria` table. The `nombre` column has a unique index. The DAO includes a `@Transaction` helper that implements an upsert-by-name pattern.
+
+```kotlin
+@Dao
+interface CategoryDao {
+
+    @Query("SELECT * FROM categoria ORDER BY nombre ASC")
+    fun observeAll(): Flow<List<Category>>
+
+    @Query("SELECT * FROM categoria WHERE nombre = :nombre LIMIT 1")
+    suspend fun findByNombre(nombre: String): Category?
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertIgnore(c: Category): Long
+
+    @Query("UPDATE categoria SET nombre = :nuevo WHERE nombre = :anterior")
+    suspend fun updateByName(nuevo: String, anterior: String): Int
+
+    @Delete
+    suspend fun delete(category: Category)
+
+    @Query("DELETE FROM categoria WHERE id = :id")
+    suspend fun deleteById(id: Long): Int
+
+    // Insert if not exists; return the existing id if it does
+    @Transaction
+    suspend fun upsertByName(nombre: String): Long {
+        val trimmed = nombre.trim()
+        val insertedId = insertIgnore(Category(nombre = trimmed))
+        if (insertedId != -1L) return insertedId
+        return findByNombre(trimmed)?.id ?: -1L
+    }
+}
+```
+
+### Method reference
+
+| Method | Returns | Notes |
+|---|---|---|
+| `observeAll()` | `Flow<List<Category>>` | Sorted by `nombre ASC` |
+| `findByNombre(nombre)` | `suspend Category?` | Exact match |
+| `insertIgnore(c)` | `suspend Long` | Returns `-1` if nombre already exists |
+| `updateByName(nuevo, anterior)` | `suspend Int` | Rows updated |
+| `delete(category)` | `suspend Unit` | By primary key |
+| `deleteById(id)` | `suspend Int` | Rows deleted |
+| `upsertByName(nombre)` | `suspend Long` | Returns id — existing or newly inserted |
+
+  </Tab>
+  <Tab title="MovementDao">
+
+`MovementDao` manages the `movimiento_inventario` table, which records inventory changes of type `"AJUSTE"`, `"COMPRA"`, or `"VENTA"`.
+
+```kotlin
+@Dao
+interface MovementDao {
+
+    @Insert
+    suspend fun insertAll(items: List<MovimientoInventario>)
+
+    @Insert
+    suspend fun insert(item: MovimientoInventario)
+
+    // Movements recorded today (UTC date comparison)
+    @Query("""
+        SELECT * FROM movimiento_inventario
+        WHERE date(fecha/1000,'unixepoch') = date('now','unixepoch')
+        ORDER BY fecha DESC
+    """)
+    fun todayMovements(): Flow<List<MovimientoInventario>>
+
+    // Cash-closure: delete today's movement log
+    @Query("""
+        DELETE FROM movimiento_inventario
+        WHERE date(fecha/1000,'unixepoch') = date('now','unixepoch')
+    """)
+    suspend fun deleteTodayMovements()
+}
+```
+
+### Method reference
+
+| Method | Returns | Notes |
+|---|---|---|
+| `insertAll(items)` | `suspend Unit` | Batch insert |
+| `insert(item)` | `suspend Unit` | Single insert |
+| `todayMovements()` | `Flow<List<MovimientoInventario>>` | UTC date comparison; newest first |
+| `deleteTodayMovements()` | `suspend Unit` | Used by cash-closure reset |
+
+<Info>
+The `tipo` field accepts three string values: `"AJUSTE"` (manual stock adjustment), `"COMPRA"` (stock increase from purchase), and `"VENTA"` (stock decrease from sale).
+</Info>
+
+  </Tab>
+</Tabs>

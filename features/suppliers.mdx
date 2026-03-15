@@ -1,0 +1,73 @@
+---
+title: Suppliers
+description: Add, edit, and manage your supplier directory. Suppliers are linked to every purchase record for expense tracking and reporting.
+---
+
+**Suppliers** (Proveedores) are the businesses or individuals from whom you buy inventory. Every purchase in Bodequita must be linked to a supplier, so keeping your supplier list up to date is essential for accurate purchase records.
+
+## Supplier Fields
+
+Each supplier record contains the following fields:
+
+| Field | Description | Required | Unique |
+|---|---|---|---|
+| `id` | Auto-generated internal identifier | Auto | — |
+| `ruc` | Tax identification number (RUC) | Yes | Yes |
+| `nombre` | Supplier business or contact name | Yes | Yes |
+| `telefono` | Phone number | No | No |
+
+Both `ruc` and `nombre` have unique constraints — you cannot have two suppliers with the same RUC or the same name.
+
+## Adding a Supplier
+
+Suppliers are managed through the **Gestionar Proveedor** dialog, accessible from the Purchases screen.
+
+<Steps>
+  <Step title="Open the supplier dialog">
+    Go to **Compras** from the drawer, then tap the **Gestionar** button in the Proveedor section.
+  </Step>
+  <Step title="Enter supplier details">
+    Fill in the **RUC**, **Nombre**, and optionally **Teléfono** fields in the dialog.
+  </Step>
+  <Step title="Save">
+    Tap **Guardar**. The supplier is added to the database and immediately available in the supplier dropdown.
+
+    If the RUC already exists, the dialog shows *"El proveedor ya existe"* and no duplicate is created.
+  </Step>
+</Steps>
+
+## Editing a Supplier
+
+Supplier names can be updated through the `SupplierViewModel.renameSupplier()` operation. In the current UI, to correct a supplier's details you can:
+
+1. Add a new supplier entry with the corrected RUC and name.
+2. Use the existing supplier for future purchases going forward.
+
+<Note>
+  Full in-place editing of all supplier fields (RUC, phone) via the UI dialog is available in the Purchases screen when adding a new supplier. Renaming an existing supplier by ID is supported at the ViewModel layer.
+</Note>
+
+## Deleting a Supplier
+
+The `SupplierViewModel.deleteSupplier()` operation removes a supplier record from the database. After deletion, the supplier no longer appears in the Purchases dropdown.
+
+<Warning>
+  Purchase records that reference a deleted supplier retain the original `proveedor_id` in the database. The purchase history is preserved but the supplier name will no longer be resolvable from the ID. Avoid deleting suppliers who have existing purchase records.
+</Warning>
+
+## How Suppliers Are Linked to Purchases
+
+When you register a purchase:
+
+- The selected supplier's `id` is stored as `proveedor_id` in the `Purchase` table.
+- This link ties every purchase expense to the supplying entity.
+- The **Cash Closure** module uses `purchaseDao.todayPurchasesTotal()` to sum today's purchase costs regardless of supplier, giving you total daily expenses.
+
+<CardGroup cols={2}>
+  <Card title="Supplier → Purchase" icon="arrow-right">
+    One supplier can be linked to many purchases over time, creating a full procurement history per vendor.
+  </Card>
+  <Card title="Purchase → Stock" icon="boxes-stacked">
+    Each confirmed purchase automatically increments product stock, closing the loop from supplier delivery to inventory availability.
+  </Card>
+</CardGroup>

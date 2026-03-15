@@ -1,0 +1,117 @@
+---
+title: 'AppDatabase'
+description: 'Room database singleton that wires together all DAOs and entities for Bodequita.'
+---
+
+`AppDatabase` is the single Room database for the Bodequita app. It owns the SQLite file on disk, provides access to every DAO, and is instantiated once via the `AppDbProvider` singleton object.
+
+## Class definition
+
+```kotlin
+@Database(
+    entities = [
+        Product::class,
+        Category::class,
+        Sale::class,
+        SaleDetail::class,
+        Supplier::class,
+        Purchase::class,
+        PurchaseDetail::class,
+        MovimientoInventario::class
+    ],
+    version = 8,
+    exportSchema = true
+)
+abstract class AppDatabase : RoomDatabase() {
+    abstract fun productDao(): ProductDao
+    abstract fun categoryDao(): CategoryDao
+    abstract fun saleDao(): SaleDao
+    abstract fun supplierDao(): SupplierDao
+    abstract fun purchaseDao(): PurchaseDao
+    abstract fun movementDao(): MovementDao
+}
+```
+
+## Database metadata
+
+| Property | Value |
+|---|---|
+| File name | `minitienda.db` |
+| Schema version | `8` |
+| Export schema | `true` |
+| Migration strategy | `fallbackToDestructiveMigration()` |
+
+<Warning>
+`fallbackToDestructiveMigration()` drops and recreates all tables when the schema version is bumped without a matching `Migration` object. Any existing data is lost on version upgrade.
+</Warning>
+
+## Entities
+
+The `@Database` annotation registers eight entity classes that map to SQLite tables.
+
+| Entity class | Table name | Notes |
+|---|---|---|
+| `Product` | `producto` | Unique index on `code`; FK to `Category` |
+| `Category` | `categoria` | Unique index on `nombre` |
+| `Sale` | `venta` | Header record for each sale |
+| `SaleDetail` | `detalle_venta` | Composite PK `(sale_id, product_id)`; CASCADE delete from `Sale` |
+| `Supplier` | `proveedor` | Unique indexes on `ruc` and `nombre` |
+| `Purchase` | `compra` | Header record for each purchase |
+| `PurchaseDetail` | `detalle_compra` | Composite PK `(purchase_id, product_id)` |
+| `MovimientoInventario` | `movimiento_inventario` | FK to `Product`; CASCADE delete |
+
+## DAO accessors
+
+| Method | Return type | Purpose |
+|---|---|---|
+| `productDao()` | `ProductDao` | Product CRUD and stock management |
+| `categoryDao()` | `CategoryDao` | Category CRUD |
+| `saleDao()` | `SaleDao` | Sales and daily totals |
+| `supplierDao()` | `SupplierDao` | Supplier CRUD |
+| `purchaseDao()` | `PurchaseDao` | Purchases and daily totals |
+| `movementDao()` | `MovementDao` | Inventory movement log |
+
+## Singleton — AppDbProvider
+
+Database construction is expensive. `AppDbProvider` ensures exactly one `AppDatabase` instance exists for the process lifetime.
+
+```kotlin
+object AppDbProvider {
+    @Volatile private var INSTANCE: AppDatabase? = null
+
+    fun get(context: android.content.Context): AppDatabase =
+        INSTANCE ?: synchronized(this) {
+            androidx.room.Room.databaseBuilder(
+                context.applicationContext,
+                AppDatabase::class.java,
+                "minitienda.db"
+            )
+                .fallbackToDestructiveMigration()
+                .build()
+                .also { INSTANCE = it }
+        }
+}
+```
+
+`@Volatile` ensures the field is always read from main memory. The double-checked locking inside `synchronized` prevents two threads from building the database simultaneously.
+
+### Typical usage
+
+```kotlin
+val db = AppDbProvider.get(context)
+val productDao = db.productDao()
+```
+
+## Thread safety
+
+<Note>
+Room does not allow database access on the main thread by default. All DAO methods that perform writes or one-shot reads are declared `suspend fun` and must be called from a coroutine. Reactive queries return `Flow<T>`, which Room emits on an internal IO-bound dispatcher.
+</Note>
+
+To run an atomic multi-step operation across several DAOs, wrap the work in `db.withTransaction { ... }`. This is used by both `SaleRepository.makeSale()` and `PurchaseRepository.makePurchase()`.
+
+```kotlin
+db.withTransaction {
+    // all DAO calls here share one SQLite transaction
+}
+```

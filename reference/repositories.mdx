@@ -1,0 +1,238 @@
+---
+title: 'Repositories'
+description: 'Repository classes that encapsulate data-access logic and enforce business rules above the DAO layer.'
+---
+
+Repositories sit between ViewModels and DAOs. They hide Room-specific types from the UI layer, group multi-DAO operations into single calls, and own any business invariants (e.g. stock checks, transactional consistency).
+
+## ProductRepository
+
+```kotlin
+class ProductRepository(private val productDao: ProductDao)
+```
+
+A thin wrapper around `ProductDao`. It exposes the same operations without leaking DAO types to ViewModels.
+
+<ParamField path="productDao" type="ProductDao" required>
+  The DAO instance injected at construction time.
+</ParamField>
+
+### Methods
+
+```kotlin
+fun observeAllProducts(): Flow<List<Product>>
+suspend fun upsertByCode(p: Product)
+suspend fun deleteProduct(p: Product)
+suspend fun updateProduct(p: Product)
+suspend fun countAll(): Int
+```
+
+| Method | Delegates to | Notes |
+|---|---|---|
+| `observeAllProducts()` | `productDao.observeAllProducts()` | Reactive stream sorted by `name ASC` |
+| `upsertByCode(p)` | `productDao.upsertByCode(p)` | Insert-or-update by `code` unique key |
+| `deleteProduct(p)` | `productDao.deleteProduct(p)` | Delete by primary key |
+| `updateProduct(p)` | `productDao.updateProduct(p)` | Full row update by primary key |
+| `countAll()` | `productDao.countAll()` | Returns total product count |
+
+---
+
+## SaleRepository
+
+```kotlin
+class SaleRepository(
+    private val db: AppDatabase,
+    private val saleDao: SaleDao,
+    private val productDao: ProductDao
+)
+```
+
+`SaleRepository` owns the core sale transaction. It coordinates stock decrement and sale record insertion in a single `withTransaction` block so either both succeed or neither does.
+
+<ParamField path="db" type="AppDatabase" required>
+  The database instance — used to open a `withTransaction` scope.
+</ParamField>
+
+<ParamField path="saleDao" type="SaleDao" required>
+  Used to insert the `Sale` header and `SaleDetail` line items.
+</ParamField>
+
+<ParamField path="productDao" type="ProductDao" required>
+  Used to call `decreaseStock()` for each cart item.
+</ParamField>
+
+### Nested type — CartItem
+
+```kotlin
+data class CartItem(val product: Product, val qty: Int) {
+    val subtotal: Double get() = product.price * qty
+}
+```
+
+Represents one line in the sales cart. `subtotal` is computed lazily from `product.price * qty`.
+
+### Methods
+
+```kotlin
+fun observeSales(): Flow<List<SaleWithDetails>>
+fun getWeeklySalesSummary(timestamp: Long): Flow<List<DailySaleSummary>>
+suspend fun makeSale(cart: List<CartItem>): Long
+```
+
+#### `makeSale(cart)`
+
+The critical transactional method. All steps execute inside `db.withTransaction`:
+
+1. For each `CartItem`, calls `productDao.decreaseStock(item.product.id, item.qty)`.
+2. If any `decreaseStock` returns `0` (insufficient stock), throws `IllegalStateException` and the entire transaction rolls back.
+3. Sums cart `subtotal` values to compute `total`.
+4. Inserts a `Sale` row via `saleDao.insertSale()`.
+5. Maps each `CartItem` to a `SaleDetail` and bulk-inserts via `saleDao.insertDetails()`.
+6. Returns the new `saleId`.
+
+```kotlin
+suspend fun makeSale(cart: List<CartItem>): Long {
+    require(cart.isNotEmpty()) { "Carrito vacío" }
+
+    return db.withTransaction {
+        for (item in cart) {
+            val updated = productDao.decreaseStock(item.product.id, item.qty)
+            if (updated == 0) {
+                throw IllegalStateException("Stock insuficiente para ${item.product.name}")
+            }
+        }
+
+        val total = cart.sumOf { it.subtotal }
+        val saleId = saleDao.insertSale(Sale(total = total))
+        val details = cart.map {
+            SaleDetail(
+                saleId = saleId,
+                productId = it.product.id,
+                cantidad = it.qty,
+                precioUnit = it.product.price,
+                subtotal = it.subtotal
+            )
+        }
+        saleDao.insertDetails(details)
+        saleId
+    }
+}
+```
+
+<Warning>
+If any product in the cart has insufficient stock, the whole sale is rejected. The UI receives an `IllegalStateException` with the product name in its message.
+</Warning>
+
+---
+
+## PurchaseRepository
+
+```kotlin
+class PurchaseRepository(
+    private val db: AppDatabase,
+    private val purchaseDao: PurchaseDao,
+    private val productDao: ProductDao
+)
+```
+
+`PurchaseRepository` records incoming stock purchases and increases product stock levels. Unlike the sale flow, it uses `withContext(Dispatchers.IO)` rather than `withTransaction`, so stock updates are not atomically tied to the purchase header insert.
+
+<ParamField path="db" type="AppDatabase" required>
+  The database instance.
+</ParamField>
+
+<ParamField path="purchaseDao" type="PurchaseDao" required>
+  Used to insert `Purchase` header and `PurchaseDetail` rows.
+</ParamField>
+
+<ParamField path="productDao" type="ProductDao" required>
+  Used to call `updateProduct()` to increment each product's stock.
+</ParamField>
+
+### Nested type — CartItem
+
+```kotlin
+data class CartItem(val product: Product, val qty: Int, val cost: Double) {
+    val subtotal: Double = qty * cost
+}
+```
+
+Extends the concept of a sale cart item with a `cost` field (the per-unit purchase price). `subtotal` is a property initializer, not a getter, so it is computed once at construction.
+
+### Methods
+
+```kotlin
+suspend fun makePurchase(supplierId: Int, lines: List<CartItem>): Long
+```
+
+#### `makePurchase(supplierId, lines)`
+
+Executes on `Dispatchers.IO`:
+
+1. Validates `lines` is not empty.
+2. Sums `subtotal` values to compute `total`.
+3. Inserts a `Purchase` row with the given `supplierId` and `total`.
+4. Maps each `CartItem` to a `PurchaseDetail` and bulk-inserts via `purchaseDao.insertDetails()`.
+5. For each line, copies the `Product` with `stock + qty` and calls `productDao.updateProduct()` to persist the stock increase.
+6. Returns the new `purchaseId`.
+
+```kotlin
+suspend fun makePurchase(supplierId: Int, lines: List<CartItem>): Long =
+    withContext(Dispatchers.IO) {
+        require(lines.isNotEmpty()) { "El carrito está vacío" }
+
+        val total = lines.sumOf { it.subtotal }
+        val purchaseId = purchaseDao.insertPurchase(
+            Purchase(proveedorId = supplierId, total = total)
+        )
+
+        val details = lines.map {
+            PurchaseDetail(
+                purchaseId = purchaseId,
+                productId = it.product.id,
+                cantidad = it.qty,
+                costoUnit = it.cost
+            )
+        }
+        purchaseDao.insertDetails(details)
+
+        lines.forEach { line ->
+            val p = line.product.copy(stock = line.product.stock + line.qty)
+            productDao.updateProduct(p)
+        }
+
+        purchaseId
+    }
+```
+
+<Note>
+Stock is updated with individual `updateProduct()` calls rather than inside a `withTransaction` block. If the process is killed after the purchase header is inserted but before all stock updates complete, the stock counts may be inconsistent with the recorded purchase.
+</Note>
+
+---
+
+## CategoryRepository
+
+```kotlin
+class CategoryRepository(private val dao: CategoryDao)
+```
+
+A thin wrapper around `CategoryDao`. It exposes only the three operations needed by `CategoryViewModel`.
+
+<ParamField path="dao" type="CategoryDao" required>
+  The DAO instance injected at construction time.
+</ParamField>
+
+### Methods
+
+```kotlin
+fun observeAll(): Flow<List<Category>>
+suspend fun add(nombre: String): Long
+suspend fun delete(id: Long): Int
+```
+
+| Method | Delegates to | Notes |
+|---|---|---|
+| `observeAll()` | `dao.observeAll()` | Reactive stream sorted by `nombre ASC` |
+| `add(nombre)` | `dao.upsertByName(nombre)` | Trims whitespace; returns id (existing or new) |
+| `delete(id)` | `dao.deleteById(id)` | Returns rows deleted |

@@ -1,0 +1,240 @@
+---
+title: MVVM pattern
+description: How Bodequita implements Model-View-ViewModel with Jetpack Compose, StateFlow, ViewModelFactory, and Room repositories.
+---
+
+Bodequita follows the **MVVM** (Model-View-ViewModel) architectural pattern throughout. Each layer has a single responsibility, and data flows in one direction — from the database up to the UI — via reactive Kotlin `Flow` and `StateFlow`.
+
+## Layer responsibilities
+
+| Layer | Role | Location |
+|---|---|---|
+| **View** | Composable screens; observe ViewModel state and dispatch user actions | `screens/` |
+| **ViewModel** | Hold and transform UI state; execute business operations via repositories | `viewmodel/` |
+| **Repository** | Coordinate DAOs; enforce business rules; wrap transactions | `repository/` |
+| **DAO** | SQL queries against Room; returns `Flow` or suspend functions | `data/dao/` |
+| **Room DB** | SQLite persistence; `minitienda.db` | `data/database/` |
+
+## Data flow
+
+```
+[Composable Screen]
+       │  collectAsState()           ▲
+       │                             │ StateFlow<T>
+       ▼                             │
+  [ViewModel]  ──────────────────────┘
+       │  suspend fun / fun
+       ▼
+  [Repository]
+       │  DAO calls
+       ▼
+    [DAO]  ──→  Flow<T>  ──→  Repository  ──→  ViewModel
+       │
+       ▼
+   [Room DB]
+```
+
+## Concrete example: product list
+
+### 1. DAO — emits a reactive stream
+
+The DAO defines a query that returns a `Flow`. Room automatically re-emits whenever the `producto` table changes.
+
+```kotlin
+// data/dao/ProductDao.kt
+@Dao
+interface ProductDao {
+    @Query("SELECT * FROM producto ORDER BY name ASC")
+    fun observeAllProducts(): Flow<List<Product>>
+
+    @Upsert
+    suspend fun upsertByCode(product: Product)
+
+    @Delete
+    suspend fun deleteProduct(product: Product)
+
+    @Update
+    suspend fun updateProduct(product: Product)
+
+    @Query("SELECT COUNT(*) FROM producto")
+    suspend fun countAll(): Int
+
+    @Query("UPDATE producto SET stock = stock - :qty WHERE id = :id AND stock >= :qty")
+    suspend fun decreaseStock(id: Int, qty: Int): Int
+}
+```
+
+### 2. Repository — thin delegation layer
+
+`ProductRepository` wraps the DAO. This indirection makes it easy to add caching, validation, or multi-DAO coordination without touching the ViewModel.
+
+```kotlin
+// repository/ProductRepository.kt
+class ProductRepository(private val productDao: ProductDao) {
+
+    fun observeAllProducts() = productDao.observeAllProducts()
+
+    suspend fun upsertByCode(p: Product) = productDao.upsertByCode(p)
+
+    suspend fun deleteProduct(p: Product) = productDao.deleteProduct(p)
+
+    suspend fun updateProduct(p: Product) = productDao.updateProduct(p)
+
+    suspend fun countAll(): Int = productDao.countAll()
+}
+```
+
+### 3. ViewModel — converts Flow to StateFlow and handles errors
+
+`ProductViewModel` converts the cold `Flow` from the repository into a `StateFlow` that the Compose UI can collect. It also exposes a `SharedFlow<String>` for one-shot UI events such as snackbar messages.
+
+```kotlin
+// viewmodel/ProductViewModel.kt
+class ProductViewModel(private val repository: ProductRepository) : ViewModel() {
+
+    // Reactive product list — updates automatically when the DB changes
+    val products: StateFlow<List<Product>> =
+        repository.observeAllProducts()
+            .stateIn(
+                scope = viewModelScope,
+                started = SharingStarted.WhileSubscribed(5_000),
+                initialValue = emptyList()
+            )
+
+    // One-shot events (snackbar messages)
+    private val _events = MutableSharedFlow<String>(extraBufferCapacity = 1)
+    val events: SharedFlow<String> = _events.asSharedFlow()
+
+    fun upsertProduct(product: Product) = viewModelScope.launch {
+        try {
+            repository.upsertByCode(product)
+            _events.tryEmit("Producto guardado")
+        } catch (e: Exception) {
+            _events.tryEmit("Error al guardar: ${e.message ?: "desconocido"}")
+        }
+    }
+
+    fun deleteProduct(product: Product) = viewModelScope.launch {
+        repository.deleteProduct(product)
+    }
+
+    fun updateProduct(product: Product) = viewModelScope.launch {
+        repository.updateProduct(product)
+    }
+}
+```
+
+<Info>
+  `SharingStarted.WhileSubscribed(5_000)` keeps the upstream `Flow` active for 5 seconds after the last collector disappears (e.g. during a configuration change), avoiding unnecessary database re-queries.
+</Info>
+
+### 4. ViewModelFactory — constructor injection
+
+Because `ProductViewModel` takes a `ProductRepository` in its constructor, it cannot be instantiated by the default `ViewModelProvider`. Each ViewModel has a paired factory:
+
+```kotlin
+// viewmodel/ProductViewModelFactory.kt
+class ProductViewModelFactory(
+    private val repository: ProductRepository
+) : ViewModelProvider.Factory {
+
+    override fun <T : ViewModel> create(modelClass: Class<T>): T {
+        if (modelClass.isAssignableFrom(ProductViewModel::class.java)) {
+            @Suppress("UNCHECKED_CAST")
+            return ProductViewModel(repository) as T
+        }
+        throw IllegalArgumentException("Unknown ViewModel class")
+    }
+}
+```
+
+The app ships one factory per ViewModel:
+
+| ViewModel | Factory |
+|---|---|
+| `ProductViewModel` | `ProductViewModelFactory` |
+| `SalesViewModel` | `SalesViewModelFactory` |
+| `PurchasesViewModel` | `PurchasesViewModelFactory` |
+| `DashboardViewModel` | `DashboardViewModelFactory` |
+| `CategoryViewModel` | `CategoryViewModelFactory` |
+| `CashClosureViewModel` | `CashClosureViewModelFactory` |
+
+### 5. Composable screen — collects state
+
+The Compose screen creates the ViewModel via its factory and collects the `StateFlow` as Compose state:
+
+```kotlin
+// Inside MainNavigation.kt — ViewModel provisioning
+val productViewModel: ProductViewModel = run {
+    val repository = remember { ProductRepository(db.productDao()) }
+    val factory = remember { ProductViewModelFactory(repository) }
+    viewModel(factory = factory)
+}
+
+// Inside ProductListScreen.kt — consuming state
+@Composable
+fun ProductListScreen(
+    navController: NavController,
+    viewModel: ProductViewModel,
+    onMenuClick: () -> Unit
+) {
+    val products by viewModel.products.collectAsState()
+
+    // products is always up-to-date; Room re-emits on every table change
+    LazyColumn {
+        items(products) { product ->
+            ProductItem(product = product)
+        }
+    }
+}
+```
+
+## Transactional repositories
+
+For operations that span multiple tables, repositories use `db.withTransaction {}`. `SaleRepository` is the clearest example: it decrements stock, inserts the sale header, and inserts all line items atomically.
+
+```kotlin
+// repository/SaleRepository.kt
+suspend fun makeSale(cart: List<CartItem>): Long {
+    return db.withTransaction {
+        for (item in cart) {
+            val updated = productDao.decreaseStock(item.product.id, item.qty)
+            if (updated == 0) {
+                throw IllegalStateException("Stock insuficiente para ${item.product.name}")
+            }
+        }
+        val total = cart.sumOf { it.subtotal }
+        val saleId = saleDao.insertSale(Sale(total = total))
+        val details = cart.map {
+            SaleDetail(
+                saleId = saleId,
+                productId = it.product.id,
+                cantidad = it.qty,
+                precioUnit = it.product.price,
+                subtotal = it.subtotal
+            )
+        }
+        saleDao.insertDetails(details)
+        saleId
+    }
+}
+```
+
+If `decreaseStock` returns `0` for any item (meaning the `WHERE stock >= qty` condition was not met), an exception is thrown and Room rolls back the entire transaction.
+
+## Summary
+
+<CardGroup cols={2}>
+  <Card title="Unidirectional data flow" icon="arrow-right">
+    UI dispatches actions to ViewModels. ViewModels write to repositories. Room emits updated `Flow` upstream, and the UI re-renders automatically.
+  </Card>
+  <Card title="No direct DB access from UI" icon="lock">
+    Composable screens never access DAOs or `AppDatabase` directly. All access is mediated through ViewModels and repositories.
+  </Card>
+  <Card title="Constructor injection via factories" icon="wrench">
+    `ViewModelProvider.Factory` implementations give each ViewModel its dependencies at creation time, making the graph explicit and testable.
+  </Card>
+  <Card title="Atomic writes" icon="shield">
+    Multi-step operations use `db.withTransaction {}` so partial state is never persisted on failure.
+  </Card>
+</CardGroup>

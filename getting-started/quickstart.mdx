@@ -1,0 +1,147 @@
+---
+title: Quickstart
+description: Walk through Bodequita's core workflow — from first login to recording your first sale.
+---
+
+This guide walks you through the app after a successful [installation](/getting-started/installation). You will log in, explore the dashboard, register a product, and record a sale.
+
+<Steps>
+  <Step title="Launch the app and reach the login screen">
+    When the app starts, `MainActivity` sets the start destination to the `"login"` route:
+
+    ```kotlin
+    NavHost(navController = navController, startDestination = "login") {
+        composable("login") { LoginScreen(navController) }
+        // ...
+    }
+    ```
+
+    The `LoginScreen` composable renders an animated card with **Usuario** and **Contraseña** fields.
+
+    Use the default credentials:
+
+    | Field | Value |
+    |---|---|
+    | Usuario | `admin` |
+    | Contraseña | `1234` |
+
+    <Info>
+      The password is stored in `SharedPreferences` via `PasswordManager` and can be changed from the login screen using **Cambiar contraseña de admin**.
+    </Info>
+
+    Tap **Ingresar**. On success, the app navigates to `"dashboard"` and removes `"login"` from the back stack:
+
+    ```kotlin
+    navController.navigate("dashboard") {
+        popUpTo("login") { inclusive = true }
+    }
+    ```
+  </Step>
+
+  <Step title="Explore the dashboard">
+    `DashboardScreen` (route `"dashboard"`) is the home screen. It shows:
+
+    - Total sales revenue and number of transactions.
+    - Active product count.
+    - A weekly sales chart powered by Vico.
+    - Quick-access cards to the main modules.
+
+    Tap the hamburger menu icon (top-left) to open the navigation drawer. The drawer links to:
+
+    | Label | Route |
+    |---|---|
+    | Panel | `dashboard` |
+    | Productos | `products` |
+    | Ventas | `sales` |
+    | Compras | `purchases` |
+    | Cierre | `cash_closure` |
+    | Perfil | `profile` |
+  </Step>
+
+  <Step title="Add your first product">
+    From the drawer or from a dashboard quick-access card, navigate to **Productos** (`"products"` route). This opens `ProductListScreen`, which lists all current products.
+
+    Tap the **+** floating action button to open `ProductRegistrationScreen`. This screen navigates to the route `"product_registration"` (or `"product_registration/{productId}"` when editing an existing item).
+
+    Fill in the required fields:
+
+    | Field | Description |
+    |---|---|
+    | Name | Product display name |
+    | Code | Unique SKU or barcode |
+    | Price | Selling price (Double) |
+    | Stock | Initial quantity (Int) |
+    | Description | Optional product notes |
+    | Category | Select from existing categories |
+
+    Tap **Guardar**. The `ProductViewModel` calls `upsertProduct`, which delegates to `ProductRepository.upsertByCode`. If a product with the same code already exists it is updated; otherwise a new row is inserted into the `producto` table.
+
+    ```kotlin
+    fun upsertProduct(product: Product) = viewModelScope.launch {
+        try {
+            repository.upsertByCode(product)
+            _events.tryEmit("Producto guardado")
+        } catch (e: Exception) {
+            _events.tryEmit("Error al guardar: ${e.message ?: "desconocido"}")
+        }
+    }
+    ```
+
+    A snackbar confirms the save. The product list updates automatically because `products` is a `StateFlow` backed by a Room `Flow`.
+  </Step>
+
+  <Step title="Record a sale">
+    Navigate to **Ventas** (`"sales"` route) to open `SalesScreen`.
+
+    1. Tap **Nueva venta** to start a new cart.
+    2. Search for the product you just created and tap it to add it to the cart.
+    3. Adjust quantities as needed. The screen shows a running subtotal.
+    4. Tap **Confirmar venta** to commit the transaction.
+
+    Under the hood, `SaleRepository.makeSale` runs the entire operation in a single Room transaction:
+
+    ```kotlin
+    suspend fun makeSale(cart: List<CartItem>): Long {
+        return db.withTransaction {
+            // Deduct stock for each item (throws if insufficient)
+            for (item in cart) {
+                val updated = productDao.decreaseStock(item.product.id, item.qty)
+                if (updated == 0) {
+                    throw IllegalStateException("Stock insuficiente para ${item.product.name}")
+                }
+            }
+            val total = cart.sumOf { it.subtotal }
+            val saleId = saleDao.insertSale(Sale(total = total))
+            val details = cart.map {
+                SaleDetail(
+                    saleId = saleId,
+                    productId = it.product.id,
+                    cantidad = it.qty,
+                    precioUnit = it.product.price,
+                    subtotal = it.subtotal
+                )
+            }
+            saleDao.insertDetails(details)
+            saleId
+        }
+    }
+    ```
+
+    Stock is decremented atomically. If any item has insufficient stock the entire transaction is rolled back and an error is surfaced to the UI.
+  </Step>
+
+  <Step title="View the cash closure summary">
+    Navigate to **Cierre** (`"cash_closure"` route) to open `CashClosureScreen`. This screen aggregates today's sales totals, purchase costs, and calculates the net income for the day — useful for end-of-day reconciliation.
+  </Step>
+</Steps>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Architecture overview" icon="sitemap" href="/architecture/overview">
+    Understand how Bodequita's layers fit together.
+  </Card>
+  <Card title="Data models" icon="database" href="/architecture/data-models">
+    Explore the Room entities and their relationships.
+  </Card>
+</CardGroup>

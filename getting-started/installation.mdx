@@ -1,0 +1,102 @@
+---
+title: Installation
+description: Set up your development environment and run Bodequita on an Android device or emulator.
+---
+
+## Prerequisites
+
+Before you begin, make sure you have the following installed:
+
+<CardGroup cols={3}>
+  <Card title="Android Studio" icon="laptop">
+    Hedgehog (2023.1.1) or newer
+  </Card>
+  <Card title="JDK 17" icon="code">
+    Required by the Gradle build configuration (`jvmTarget = "17"`)
+  </Card>
+  <Card title="Android device or emulator" icon="mobile">
+    API level 25 (Android 7.1 Nougat) or higher
+  </Card>
+</CardGroup>
+
+<Info>
+  The app targets `compileSdk 36` and `targetSdk 36`. Android Studio Hedgehog ships with the SDK tools needed to build against these API levels.
+</Info>
+
+## Installation steps
+
+<Steps>
+  <Step title="Clone the repository">
+    Open a terminal and clone the project:
+
+    ```bash
+    git clone https://github.com/your-org/bodequita.git
+    cd bodequita
+    ```
+  </Step>
+
+  <Step title="Open in Android Studio">
+    Launch Android Studio, select **File → Open**, and navigate to the cloned `bodequita` directory. Select the root folder (the one containing `settings.gradle.kts`) and click **OK**.
+
+    Android Studio will detect the Gradle project automatically.
+  </Step>
+
+  <Step title="Sync Gradle">
+    Android Studio will prompt you to sync Gradle. Click **Sync Now** in the notification bar, or go to **File → Sync Project with Gradle Files**.
+
+    The build uses the Version Catalog (`libs.versions.toml`). Key dependencies resolved during sync include:
+
+    ```kotlin
+    // Room (local database)
+    implementation("androidx.room:room-runtime:2.6.1")
+    implementation("androidx.room:room-ktx:2.6.1")
+    kapt("androidx.room:room-compiler:2.6.1")
+
+    // Jetpack Compose BOM
+    implementation(platform(libs.androidx.compose.bom))
+    implementation(libs.androidx.compose.material3)
+
+    // Navigation
+    implementation(libs.navigation.compose)
+
+    // Vico charts
+    implementation("com.patrykandpatryk.vico:core:1.13.0")
+    implementation("com.patrykandpatryk.vico:compose-m3:1.13.0")
+    ```
+
+    <Warning>
+      The project uses `kapt` for Room annotation processing. Make sure your JDK is set to version 17 in **File → Project Structure → SDK Location → Gradle Settings**.
+    </Warning>
+  </Step>
+
+  <Step title="Select a run target">
+    In the toolbar, open the device selector dropdown and choose a connected Android device or an existing AVD (Android Virtual Device). If you do not have an AVD, go to **Device Manager → Create Virtual Device** and select a device profile with API 25 or higher.
+  </Step>
+
+  <Step title="Build and run">
+    Click **Run** (the green play button) or press `Shift+F10`. Android Studio will:
+
+    1. Compile the Kotlin sources.
+    2. Process Room annotations via KAPT and generate DAO implementations.
+    3. Package the APK with application ID `com.trabajo.minitienda`.
+    4. Install and launch the app on your selected device.
+
+    The app opens on the **Login** screen when it starts for the first time.
+  </Step>
+</Steps>
+
+## Build configuration summary
+
+| Property | Value |
+|---|---|
+| Application ID | `com.trabajo.minitienda` |
+| `compileSdk` | 36 |
+| `minSdk` | 25 |
+| `targetSdk` | 36 |
+| `versionName` | 1.0 |
+| JVM target | 17 |
+| Compose compiler extension | 1.6.0 |
+
+<Tip>
+  If the build fails with a daemon JVM error, add `-Djava.net.preferIPv4Stack=true` to the Kotlin daemon options. This is already set in `gradle.properties` of the repository.
+</Tip>

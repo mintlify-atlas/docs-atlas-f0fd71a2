@@ -1,0 +1,114 @@
+---
+title: Architecture overview
+description: How Bodequita's presentation, business logic, and data layers are structured using MVVM and Jetpack libraries.
+---
+
+Bodequita is a single-module Android application built with **Jetpack Compose**, **Room**, and the **MVVM** pattern. All data is stored locally — there is no network layer. The app package is `com.trabajo.minitienda` and the local database file is `minitienda.db`.
+
+## Layer diagram
+
+```
+┌─────────────────────────────────────────────────┐
+│              Presentation Layer                 │
+│   Composable Screens  ←→  ViewModels            │
+│   (screens/)              (viewmodel/)          │
+│   Material Design 3 · Vico charts               │
+└────────────────────┬────────────────────────────┘
+                     │  StateFlow / SharedFlow
+┌────────────────────▼────────────────────────────┐
+│              Domain / Repository Layer          │
+│   ProductRepository  SaleRepository             │
+│   PurchaseRepository  CategoryRepository  …     │
+│   (repository/)                                 │
+└────────────────────┬────────────────────────────┘
+                     │  suspend funs / Flow
+┌────────────────────▼────────────────────────────┐
+│                 Data Layer                      │
+│   DAOs (data/dao/)                              │
+│   Room Database — minitienda.db                 │
+│   Entities (data/model/)                        │
+└─────────────────────────────────────────────────┘
+```
+
+## Technology stack
+
+| Library | Purpose |
+|---|---|
+| Jetpack Compose | Declarative UI toolkit for all screens |
+| Material Design 3 | Design system tokens, components, and theming |
+| Navigation Compose | Type-safe in-app navigation with `NavHost` |
+| Room 2.6.1 | SQLite abstraction — entities, DAOs, migrations |
+| Kotlin Coroutines + Flow | Async operations and reactive data streams |
+| Vico 1.13.0 | Compose-native chart library for the dashboard |
+| KAPT | Annotation processor for Room code generation |
+
+## Package structure
+
+```
+com.trabajo.minitienda/
+├── MainActivity.kt              # Entry point; hosts MiniTiendaTheme + MainNavigation
+├── screens/                     # Composable screens and MainNavigation
+│   ├── MainNavigation.kt        # NavHost wiring, ViewModel provisioning, nav drawer
+│   ├── LoginScreen.kt
+│   ├── DashboardScreen.kt
+│   ├── ProductListScreen.kt
+│   ├── ProductRegistrationScreen.kt
+│   ├── SalesScreen.kt
+│   ├── PurchasesScreen.kt
+│   ├── CashClosureScreen.kt
+│   └── ProfileScreen.kt
+├── viewmodel/                   # ViewModels and ViewModelFactory classes
+│   ├── ProductViewModel.kt
+│   ├── ProductViewModelFactory.kt
+│   ├── SalesViewModel.kt
+│   ├── SalesViewModelFactory.kt
+│   ├── PurchasesViewModel.kt
+│   ├── PurchasesViewModelFactory.kt
+│   ├── DashboardViewModel.kt
+│   ├── DashboardViewModelFactory.kt
+│   ├── CategoryViewModel.kt
+│   ├── CategoryViewModelFactory.kt
+│   ├── CashClosureViewModel.kt
+│   └── CashClosureViewModelFactory.kt
+├── repository/                  # Repository classes (business logic + data access)
+│   ├── ProductRepository.kt
+│   ├── SaleRepository.kt
+│   ├── PurchaseRepository.kt
+│   ├── CategoryRepository.kt
+│   └── SupplierRepository.kt
+├── data/
+│   ├── database/
+│   │   └── AppDatabase.kt       # Room @Database declaration; AppDbProvider singleton
+│   ├── dao/                     # Room DAO interfaces
+│   │   ├── ProductDao.kt
+│   │   ├── SaleDao.kt
+│   │   ├── PurchaseDao.kt
+│   │   ├── CategoryDao.kt
+│   │   ├── SupplierDao.kt
+│   │   └── MovementDao.kt
+│   └── model/                   # Room @Entity data classes
+│       ├── Product.kt
+│       ├── Category.kt
+│       ├── Sale.kt              # Sale, SaleDetail, SaleWithDetails, DailySaleSummary
+│       ├── Purchase.kt          # Purchase, PurchaseDetail, PurchaseWithDetails
+│       ├── Supplier.kt
+│       ├── Movement.kt          # MovimientoInventario
+│       └── SaleBrief.kt
+├── ui/
+│   ├── theme/                   # MiniTiendaTheme, color scheme, typography
+│   └── components/              # Shared composable components
+└── utils/
+    └── ThemeManager.kt          # Dark/light mode state via SharedPreferences
+```
+
+## Key design decisions
+
+**Single-activity architecture.** `MainActivity` is the only `Activity`. All screen transitions are handled by `NavHost` inside the `MainNavigation` composable.
+
+**ViewModel scoping.** ViewModels are created in `MainNavigation` using custom `ViewModelProvider.Factory` implementations. This allows repositories (and by extension DAOs) to be injected rather than looked up via service locator.
+
+**Reactive state.** DAOs return Kotlin `Flow`, which repositories pass through to ViewModels. ViewModels convert `Flow` to `StateFlow` using `stateIn(SharingStarted.WhileSubscribed(5_000))`, so the UI always reflects the latest database state without manual refresh calls.
+
+**Transactional writes.** Operations that span multiple tables (recording a sale, recording a purchase) use `db.withTransaction {}` to guarantee atomicity. If any step fails, the entire operation is rolled back.
+
+**Database.** Room is initialised via `AppDbProvider` (a thread-safe singleton) with `fallbackToDestructiveMigration()`. The database is named `minitienda.db` and currently at schema version 8.

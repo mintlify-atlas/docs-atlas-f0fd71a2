@@ -1,0 +1,92 @@
+---
+title: Purchases
+description: Register stock replenishment purchases from suppliers, track purchase history, and automatically update product inventory on confirmation.
+---
+
+The **Purchases** screen (Registrar Compra) lets you record goods received from a supplier. When a purchase is confirmed, all product stock levels are incremented automatically.
+
+## Registering a Purchase
+
+<Steps>
+  <Step title="Open the Purchases screen">
+    Navigate to **Compras** from the drawer or the Dashboard quick-access card.
+  </Step>
+  <Step title="Select a supplier">
+    In the **Proveedor** section, tap the dropdown and choose the supplier this purchase is from. The dropdown shows each supplier's name and RUC number.
+
+    If the supplier is not listed yet, tap **Gestionar** to open the supplier manager dialog and add them on the spot.
+  </Step>
+  <Step title="Add products to the purchase">
+    In the **Agregar Productos** section, fill in:
+
+    | Field | Description |
+    |---|---|
+    | Nombre o Código | Product name or product code (matches existing products or creates a minimal new record) |
+    | Cantidad | Number of units being purchased |
+    | Costo (S/) | Unit cost paid to the supplier |
+
+    Tap **Agregar** to add the line to the purchase cart. You can add as many lines as needed.
+
+    - If the same product and cost already exist in the cart, the quantity is incremented rather than creating a duplicate.
+    - To remove a line, tap its red trash icon.
+  </Step>
+  <Step title="Review the purchase summary">
+    The **Resumen** section shows:
+    - Number of distinct products
+    - Total units across all lines
+    - **Total** cost in Soles (S/)
+  </Step>
+  <Step title="Confirm the purchase">
+    Tap **Registrar compra**. The app validates that a supplier is selected and that the cart is not empty.
+
+    On confirmation:
+    - Each product's stock is incremented by the purchased quantity.
+    - If a product code doesn't yet exist in the catalog, a minimal product record is created automatically so the purchase can proceed.
+    - The cart is cleared and you're returned to the previous screen.
+    - A snackbar confirms the purchase ID (e.g., *"Compra registrada (#3)"*).
+
+    Tap **Cancelar** to clear the cart without saving.
+  </Step>
+</Steps>
+
+<Warning>
+  You must select a supplier before you can confirm a purchase. Attempting to register without a supplier shows the message *"Selecciona un proveedor"*.
+</Warning>
+
+## Adding a New Supplier On-the-Fly
+
+Tap the **Gestionar** button in the Proveedor section to open the supplier dialog. Fill in:
+
+- **RUC** — Unique tax identification number (required)
+- **Nombre** — Supplier business name (required)
+- **Teléfono** — Contact phone number (optional)
+
+Tap **Guardar** to create the supplier. The new supplier appears immediately in the dropdown.
+
+<Note>
+  RUC must be unique. If you enter a RUC that already exists, the system shows *"El proveedor ya existe"* and does not create a duplicate.
+</Note>
+
+## Purchase Data Model
+
+Each registered purchase is stored across two related structures:
+
+<CardGroup cols={2}>
+  <Card title="Purchase" icon="truck">
+    Header record with `id`, `proveedor_id` (foreign key to the supplier), `fecha` timestamp, and `total` cost.
+  </Card>
+  <Card title="PurchaseDetail" icon="list">
+    One row per product line: `purchase_id`, `product_id`, `cantidad`, `costo_unit` (unit cost), and `subtotal` (auto-calculated as `cantidad × costo_unit`).
+  </Card>
+</CardGroup>
+
+`PurchaseWithDetails` combines the purchase header with its full list of detail lines for reporting and the Cash Closure module.
+
+## Link Between Purchases and Suppliers
+
+Every purchase record stores a `proveedor_id` that references the `Supplier` table. This link is used by:
+
+- The **Cash Closure** screen to total today's purchase expenses.
+- Future reporting to break down spending by supplier.
+
+Deleting a supplier does not automatically delete their purchase history — the records remain in the database with the supplier ID intact.

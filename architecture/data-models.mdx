@@ -1,0 +1,317 @@
+---
+title: Data models
+description: All Room entities used by Bodequita, including their fields, annotations, table names, and relationships.
+---
+
+All persistent data is stored in the `minitienda.db` Room database. The entities are defined in `com.trabajo.minitienda.data.model` and registered in `AppDatabase`.
+
+## Entity list
+
+| Kotlin class | Table name | Description |
+|---|---|---|
+| `Product` | `producto` | Store items with pricing and stock |
+| `Category` | `categoria` | Product categories |
+| `Sale` | `venta` | Sale header record |
+| `SaleDetail` | `detalle_venta` | Line items for a sale |
+| `Purchase` | `compra` | Purchase header record |
+| `PurchaseDetail` | `detalle_compra` | Line items for a purchase |
+| `Supplier` | `proveedor` | Supplier contact information |
+| `MovimientoInventario` | `movimiento_inventario` | Inventory movement log |
+
+---
+
+## Product
+
+Represents a product in the store. The `code` column is unique and used for upsert operations. The `category_id` foreign key is nullable — deleting a category sets it to `NULL` on all affected products.
+
+```kotlin
+@Entity(
+    tableName = "producto",
+    indices = [
+        Index(value = ["code"], unique = true),
+        Index(value = ["category_id"])
+    ],
+    foreignKeys = [
+        ForeignKey(
+            entity = Category::class,
+            parentColumns = ["id"],
+            childColumns = ["category_id"],
+            onDelete = ForeignKey.SET_NULL
+        )
+    ]
+)
+data class Product(
+    @PrimaryKey(autoGenerate = true) val id: Int = 0,
+    val name: String,
+    val code: String,
+    val price: Double,
+    val stock: Int,
+    val descripcion: String,
+    @ColumnInfo(name = "category_id") val categoryId: Long? = null
+)
+```
+
+---
+
+## Category
+
+Product categories. The `nombre` column has a unique index to prevent duplicate category names.
+
+```kotlin
+@Entity(
+    tableName = "categoria",
+    indices = [Index(value = ["nombre"], unique = true)]
+)
+data class Category(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val nombre: String
+)
+```
+
+---
+
+## Sale and sale line items
+
+### Sale
+
+The sale header stores the timestamp and total amount.
+
+```kotlin
+@Entity(tableName = "venta")
+data class Sale(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val fecha: Long = System.currentTimeMillis(),
+    val total: Double
+)
+```
+
+### SaleDetail
+
+One row per product line in a sale. Uses a composite primary key `(sale_id, product_id)`. Deleting a `Sale` cascades to its `SaleDetail` rows; deleting a `Product` that is referenced by a detail is restricted.
+
+```kotlin
+@Entity(
+    tableName = "detalle_venta",
+    primaryKeys = ["sale_id", "product_id"],
+    foreignKeys = [
+        ForeignKey(
+            entity = Sale::class,
+            parentColumns = ["id"],
+            childColumns = ["sale_id"],
+            onDelete = ForeignKey.CASCADE
+        ),
+        ForeignKey(
+            entity = Product::class,
+            parentColumns = ["id"],
+            childColumns = ["product_id"],
+            onDelete = ForeignKey.RESTRICT
+        )
+    ],
+    indices = [Index("product_id")]
+)
+data class SaleDetail(
+    @ColumnInfo(name = "sale_id") val saleId: Long,
+    @ColumnInfo(name = "product_id") val productId: Int,
+    val cantidad: Int,
+    @ColumnInfo(name = "precio_unit") val precioUnit: Double,
+    val subtotal: Double
+)
+```
+
+### SaleWithDetails
+
+A non-entity POJO that Room assembles using `@Embedded` and `@Relation`. It is used to load a complete sale and all its line items in a single query.
+
+```kotlin
+data class SaleWithDetails(
+    @Embedded val sale: Sale,
+    @Relation(
+        parentColumn = "id",
+        entityColumn = "sale_id",
+        entity = SaleDetail::class
+    )
+    val items: List<SaleDetail>
+)
+```
+
+### DailySaleSummary
+
+A projection returned by an aggregation query in `SaleDao`. Used to populate the weekly chart on the dashboard.
+
+```kotlin
+data class DailySaleSummary(
+    val saleDate: String,
+    val total: Double
+)
+```
+
+### SaleBrief
+
+A lightweight projection used to display the sale history list without loading full detail rows. Provides a formatted date string via a computed property.
+
+```kotlin
+data class SaleBrief(
+    val id: Long,
+    val total: Double,
+    val fecha: Long
+) {
+    val fechaString: String
+        get() {
+            if (fecha == 0L) return "-"
+            val df = SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault())
+            return df.format(Date(fecha))
+        }
+}
+```
+
+---
+
+## Purchase and purchase line items
+
+### Purchase
+
+The purchase header links to a supplier (`proveedor_id`) and records the total cost.
+
+```kotlin
+@Entity(tableName = "compra")
+data class Purchase(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    @ColumnInfo(name = "proveedor_id") val proveedorId: Int,
+    val fecha: Long = System.currentTimeMillis(),
+    val total: Double
+)
+```
+
+### PurchaseDetail
+
+One row per product in a purchase. Uses a composite primary key `(purchase_id, product_id)`. Deleting a `Purchase` cascades to its detail rows.
+
+```kotlin
+@Entity(
+    tableName = "detalle_compra",
+    primaryKeys = ["purchase_id", "product_id"],
+    foreignKeys = [
+        ForeignKey(
+            entity = Purchase::class,
+            parentColumns = ["id"],
+            childColumns = ["purchase_id"],
+            onDelete = ForeignKey.CASCADE
+        ),
+        ForeignKey(
+            entity = Product::class,
+            parentColumns = ["id"],
+            childColumns = ["product_id"],
+            onDelete = ForeignKey.RESTRICT
+        )
+    ],
+    indices = [Index("product_id")]
+)
+data class PurchaseDetail(
+    @ColumnInfo(name = "purchase_id") val purchaseId: Long,
+    @ColumnInfo(name = "product_id") val productId: Int,
+    val cantidad: Int,
+    @ColumnInfo(name = "costo_unit") val costoUnit: Double,
+    val subtotal: Double = cantidad * costoUnit
+)
+```
+
+### PurchaseWithDetails
+
+Like `SaleWithDetails`, this POJO uses `@Embedded` and `@Relation` to load a complete purchase with all its line items.
+
+```kotlin
+data class PurchaseWithDetails(
+    @Embedded val compra: Purchase,
+    @Relation(
+        parentColumn = "id",
+        entityColumn = "purchase_id",
+        entity = PurchaseDetail::class
+    )
+    val detalles: List<PurchaseDetail>
+)
+```
+
+---
+
+## Supplier
+
+Stores supplier contact information. Both `ruc` and `nombre` have unique indexes.
+
+```kotlin
+@Entity(
+    tableName = "proveedor",
+    indices = [
+        Index(value = ["ruc"], unique = true),
+        Index(value = ["nombre"], unique = true)
+    ]
+)
+data class Supplier(
+    @PrimaryKey(autoGenerate = true) val id: Int = 0,
+    val ruc: String,
+    val nombre: String,
+    val telefono: String? = null
+)
+```
+
+---
+
+## MovimientoInventario
+
+An append-only audit log of inventory changes. Each row records a product, the direction of change (`tipo`), and the quantity affected. The `tipo` field takes one of three string values: `"AJUSTE"`, `"COMPRA"`, or `"VENTA"`.
+
+```kotlin
+@Entity(
+    tableName = "movimiento_inventario",
+    indices = [Index("producto_id")],
+    foreignKeys = [
+        ForeignKey(
+            entity = Product::class,
+            parentColumns = ["id"],
+            childColumns = ["producto_id"],
+            onDelete = ForeignKey.CASCADE
+        )
+    ]
+)
+data class MovimientoInventario(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    @ColumnInfo(name = "producto_id") val productoId: Int,
+    val fecha: Long = System.currentTimeMillis(),
+    val tipo: String,   // "AJUSTE" | "COMPRA" | "VENTA"
+    val cantidad: Int
+)
+```
+
+---
+
+## Database registration
+
+All entities are declared in `AppDatabase`:
+
+```kotlin
+@Database(
+    entities = [
+        Product::class,
+        Category::class,
+        Sale::class,
+        SaleDetail::class,
+        Supplier::class,
+        Purchase::class,
+        PurchaseDetail::class,
+        MovimientoInventario::class
+    ],
+    version = 8,
+    exportSchema = true
+)
+abstract class AppDatabase : RoomDatabase() {
+    abstract fun productDao(): ProductDao
+    abstract fun categoryDao(): CategoryDao
+    abstract fun saleDao(): SaleDao
+    abstract fun supplierDao(): SupplierDao
+    abstract fun purchaseDao(): PurchaseDao
+    abstract fun movementDao(): MovementDao
+}
+```
+
+<Note>
+  The database uses `fallbackToDestructiveMigration()`. During development, incrementing `version` in the `@Database` annotation will drop and recreate all tables rather than running incremental migration scripts.
+</Note>

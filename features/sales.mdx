@@ -1,0 +1,97 @@
+---
+title: Sales
+description: Record sales transactions, manage a shopping cart with multiple products, and track daily sales history with automatic stock decrement.
+---
+
+The **Sales** screen (Registrar Venta) lets you build a cart of products and complete a sale in seconds. Stock levels are decremented automatically when the sale is confirmed.
+
+## Recording a Sale
+
+<Steps>
+  <Step title="Open the Sales screen">
+    Navigate to **Ventas** from the drawer or the Dashboard quick-access card. The screen opens with an empty cart.
+  </Step>
+  <Step title="Select a product">
+    In the **Agregar Productos** section, use the dropdown to find a product:
+    - Tap the **Producto** field to open the dropdown.
+    - Type part of the product name or code to filter the list (up to 12 results shown).
+    - Tap a product to select it — its code is automatically filled into the **Código** field.
+
+    Alternatively, type the product code directly into the **Código** field if you know it.
+  </Step>
+  <Step title="Set the quantity">
+    Enter the desired quantity in the **Cantidad** field. It defaults to `1`.
+  </Step>
+  <Step title="Add to cart">
+    Tap **Agregar** (the button with a + icon). The product appears in the **Productos en la Venta** section.
+
+    - If the same product is added again, its quantity is incremented rather than creating a duplicate line.
+    - If the code is not found or the quantity is invalid, a snackbar message explains the problem.
+  </Step>
+  <Step title="Review the cart">
+    The cart list shows each line item with:
+    - Product name
+    - Quantity × unit price
+    - Line subtotal in Soles (S/)
+    - A remove button (red trash icon)
+
+    The **Resumen de Venta** panel on the right (or below on narrow screens) shows:
+    - Number of distinct products
+    - Total units
+    - Subtotal (before tax)
+    - IGV at 18%
+    - **Total** (the final amount charged)
+  </Step>
+  <Step title="Complete the sale">
+    Tap **Registrar Venta** (the green button with a checkmark). The sale is saved and:
+    - Stock for each sold product is decremented by the sold quantity.
+    - The cart is cleared automatically.
+    - A snackbar confirms the sale with its assigned ID (e.g., *"Venta realizada (#5)"*).
+
+    Tap **Cancelar** at any point to clear the entire cart without saving.
+  </Step>
+</Steps>
+
+<Note>
+  On tablets and wide screens, the cart and summary panels are displayed side-by-side. On phones, they stack vertically and the screen is scrollable.
+</Note>
+
+## Sale Data Model
+
+Each completed sale is stored across three related structures:
+
+<CardGroup cols={3}>
+  <Card title="Sale" icon="receipt">
+    Header record with auto-generated `id`, a `fecha` timestamp (milliseconds), and the `total` amount.
+  </Card>
+  <Card title="SaleDetail" icon="list">
+    One row per product in the sale, storing `sale_id`, `product_id`, `cantidad` (quantity), `precio_unit` (unit price at time of sale), and `subtotal`.
+  </Card>
+  <Card title="SaleWithDetails" icon="table">
+    A combined view that embeds the `Sale` header with its full list of `SaleDetail` items — used for history and reporting.
+  </Card>
+</CardGroup>
+
+Additionally, `DailySaleSummary` aggregates total revenue per day (used by the Dashboard weekly chart).
+
+## Stock Validation
+
+The app validates stock before adding a product to the cart:
+
+- If the product code is blank, the sale is blocked with the message *"Ingresa un código o selecciona un producto"*.
+- If the quantity is zero or negative, the message *"Cantidad inválida"* is shown.
+- Products with zero available stock can still be added to the cart during this version — ensure you monitor the Dashboard's low-stock banner to avoid overselling.
+
+<Tip>
+  Use the Dashboard's low-stock banner as a proactive alert. When stock drops below 10 units, the banner appears automatically so you can restock via a purchase before running out.
+</Tip>
+
+## Sales Summary in the Sale Screen
+
+| Field | Description |
+|---|---|
+| Productos | Number of distinct product lines in the cart |
+| Unidades | Total quantity of all items combined |
+| Subtotal | Sum of all line subtotals (excluding tax) |
+| IGV (18%) | Peruvian tax calculated at 18% of subtotal |
+| Total | Final amount = Subtotal + IGV |
